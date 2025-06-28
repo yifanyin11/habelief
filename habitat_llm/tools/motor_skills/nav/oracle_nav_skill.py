@@ -400,7 +400,8 @@ class OracleNavSkill(SkillPolicy):
 
         while abs(angle) > self.turn_thresh:
             # Compute the robot facing orientation
-            rel_pos = (next_pos - cur_pos)[[0, 2]]
+            # Convert Vector3 objects to numpy arrays before indexing
+            rel_pos = np.array([next_pos[0] - cur_pos[0], next_pos[2] - cur_pos[2]], dtype=np.float32)
             forward = np.array([1.0, 0, 0])
             robot_forward = np.array(trans.transform_vector(forward))
             robot_forward = robot_forward[[0, 2]]

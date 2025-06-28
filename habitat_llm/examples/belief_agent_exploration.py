@@ -381,12 +381,28 @@ if __name__ == "__main__":
     )
     cfg_path = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/configurations"
     with initialize_config_dir(config_dir=cfg_path, version_base="1.2"):
-        cfg = compose(config_name="sp_reason.yaml")
-    cfg.checkpoint_path = "/scratch/tshu2/yyin34/projects/3d_belief/DFM/outputs/training/pixelsplat/habitat/full_cond/model-132.pt"
+        cfg = compose(
+            config_name="sp_reason.yaml",
+            overrides=[
+                "model.encoder.use_epipolar_transformer=False",
+                "model.encoder.use_image_condition=True",
+                "model.encoder.depth_predictor_time_embed=True",
+                "model.encoder.evolve_ctxt=True",
+                "model.encoder.use_camera_pose=True",
+                "model.encoder.use_semantic=True",
+                "model.encoder.use_reg_model=True",
+                "model.encoder.d_semantic=512",
+                "model.encoder.d_semantic_reg=384",
+                "model.encoder.backbone.view_attn_n_layers=4",
+                "model.encoder.backbone.use_diff_pos_embed=True",
+                "model.encoder.backbone.use_camera_pose=True",
+                "model.encoder.backbone.use_image_condition=True",
+                "agent.save_scene=True",
+            ]
+        )
+    cfg.checkpoint_path = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/weights/model-7.pt"
     cfg.results_folder = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/belief_agent"
     cfg.semantic_config = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/configurations/semantic/onehot.yaml"
-    cfg.model.encoder.evolve_ctxt = False
-    cfg.agent.save_scene = True
 
     # Run planner
     run_planner(cfg)

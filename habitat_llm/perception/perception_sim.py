@@ -138,7 +138,9 @@ def compute_2d_bbox_from_aabb(local_aabb, global_transform, intrinsics, extrinsi
 
     bbox_width = x_max - x_min
     bbox_height = y_max - y_min
-
+    if bbox_width < 0 or bbox_height < 0:
+        bbox_width = max(bbox_width, 0)
+        bbox_height = max(bbox_height, 0)
     bbox_area = bbox_width * bbox_height
 
     if bbox_area == 0:
@@ -767,7 +769,6 @@ class PerceptionSim(Perception):
         - agent_uids = ["1"] to access human obs in multi-agent setup
         """
         handles = {}
-
         for uid in agent_uids:
             if uid == "0":
                 if "articulated_agent_arm_panoptic" in obs:
@@ -788,7 +789,11 @@ class PerceptionSim(Perception):
             else:
                 raise ValueError(f"Invalid agent uid: {uid}")
         
-            curr_agent = f"agent_{uid}"
+            if '0' not in key and '1' not in key:
+                single_agent = True
+            else:
+                single_agent = False
+                curr_agent = f"agent_{uid}"
             # try:
             if key in obs:
                 unique_obj_ids = np.unique(obs[key])
@@ -847,13 +852,19 @@ class PerceptionSim(Perception):
                     local_aabb, global_transform = get_bb_for_object_id(self.sim, obj_id)
                     
                     # Grab the agent's camera intrinsics
-                    sensor_uuid = f"{curr_agent}_{camera_source}_rgb"
+                    if not single_agent:
+                        sensor_uuid = f"{curr_agent}_{camera_source}_rgb"
+                    else:
+                        sensor_uuid = f"{camera_source}_rgb"
 
                     intrinsics_array = camera_spec_to_intrinsics(
                         self.sim.agents[0]._sensors[sensor_uuid].specification()
                     )
                     # Grab the agent's camera pose
-                    extrinsics = self.sim.agents[0]._sensors[f"{curr_agent}_{camera_source}_rgb"].render_camera.camera_matrix
+                    if not single_agent:
+                        extrinsics = self.sim.agents[0]._sensors[f"{curr_agent}_{camera_source}_rgb"].render_camera.camera_matrix
+                    else:
+                        extrinsics = self.sim.agents[0]._sensors[f"{camera_source}_rgb"].render_camera.camera_matrix
                     # Compute the 2D bounding box area
                     bbox = compute_2d_bbox_from_aabb(local_aabb, np.array(global_transform), np.array(intrinsics_array), np.array(extrinsics))
                     projected_bbox_area = bbox["area"]
@@ -876,6 +887,8 @@ class PerceptionSim(Perception):
                 raise ValueError(f"{key} not found in obs")
             # except:
             #     pass
+            if single_agent:
+                break
 
         return handles
 
@@ -918,9 +931,8 @@ class PerceptionSim(Perception):
         # Forcefully add robot and human node names
         agent_names = [f"agent_{uid}" for uid in agent_uids]
         names.extend(agent_names)
-
         # Check visibility of all furniture in the current room
-        if 'agent_1' in agent_names:
+        if ('0' in list(obs.keys())[1] or '1' in list(obs.keys())[1]) and 'agent_1' in agent_names:
             furns_in_room = self.gt_graph.get_furniture_in_room(self.gt_graph.get_room_for_entity(self.gt_graph.get_human()))
             furns_in_room = [furn for furn in furns_in_room if furn.name not in names]
             # Grab the agent's camera intrinsics

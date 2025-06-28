@@ -62,6 +62,7 @@ def run_planner():
         "evaluation.output_dir=./outputs",
         "trajectory.save=True",
         "trajectory.agent_names=[main_agent]",
+        "trajectory.save_path=data/trajectories/test/",
     ]
 
     EPISODE_OVERRIDES = [
@@ -159,15 +160,15 @@ def run_planner():
                     hl_action_name, hl_action_input, observations
                 )
                 low_level_action = {0: low_level_action}
-                try:
-                    obs, reward, done, info = env_interface.step(
-                        low_level_action, room_name=current_room.name
-                    )
-                except:
-                    break
-                # obs, reward, done, info = env_interface.step(
-                #     low_level_action, room_name=current_room.name
-                # )
+                # try:
+                #     obs, reward, done, info = env_interface.step(
+                #         low_level_action, room_name=current_room.name
+                #     )
+                # except:
+                #     break
+                obs, reward, done, info = env_interface.step(
+                    low_level_action, room_name=current_room.name
+                )
                 # Refresh observations
                 observations = env_interface.parse_observations(obs)
                 # Store third person frames for generating video

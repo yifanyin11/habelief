@@ -7,7 +7,7 @@ defaults:
   - /habitat/simulator/agents@habitat.simulator.agents.agent_1: human
   - /habitat/task/actions@habitat.task.actions.agent_1_humanoid_base_velocity: humanoid_base_velocity
   - /habitat/task/actions@habitat.task.actions.agent_1_humanoidjoint_action: humanoidjoint_action
-  - /habitat/task/actions@habitat.task.actions.agent_1_oracle_coord_action: oracle_nav_action
+  # - /habitat/task/actions@habitat.task.actions.agent_1_oracle_coord_action: oracle_nav_action
   - /world_model@world_model: gt_graph
   - /trajectory@trajectory : trajectory_logger_human
   - /agent/@agents.agent_0.config: oracle_rearrange_agent
@@ -45,7 +45,6 @@ habitat:
     pddl_domain_def: fp
   simulator:
     agents:
-
       agent_1:
         radius: 0.3
         articulated_agent_type: 'KinematicHumanoid'

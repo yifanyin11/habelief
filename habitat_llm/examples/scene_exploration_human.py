@@ -63,7 +63,7 @@ def run_planner():
         "evaluation.output_dir=./outputs",
         "trajectory.save=True",
         "trajectory.agent_names=[agent_1]",
-        "trajectory.save_path=data/trajectories/habelief/test/",
+        "trajectory.save_path=data/trajectories/test/",
     ]
 
     EPISODE_OVERRIDES = [
