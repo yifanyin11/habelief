@@ -2,6 +2,7 @@ defaults:
 
   - /tools/motor_skills@tools.motor_skills:
     - oracle_nav
+    - oracle_nav_pose
     - oracle_pick
     - oracle_place
     - oracle_open

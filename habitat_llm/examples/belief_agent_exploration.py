@@ -229,15 +229,6 @@ def run_planner(cfg: DictConfig):
     robot_agent_uid = config.robot_agent_uid
     room_type = "kitchen"
 
-    follower = ShortestPathFollower(
-        sim=env_interface.env.env.env._env.sim,
-        goal_radius=0.2,
-        return_one_hot=False,
-        stop_on_error=True
-    )
-
-    env = env_interface.env.env.env._env
-
     # initial reset to load first episode
     for idx in range(num_episodes):
         env_interface.reset_environment()
@@ -281,11 +272,11 @@ def run_planner(cfg: DictConfig):
             obs, _, _, _ = env_interface.step(
                 low_level_action, room_name=current_room.name
             )
+            observations = env_interface.parse_observations(obs)
             break
         
         first_pose_habitat = None
         step = 0
-
         for step in range(5):
             # Extract obs
             habitat_obs = extract_obs(env_interface, obs)
@@ -310,9 +301,13 @@ def run_planner(cfg: DictConfig):
             os.makedirs(
                 save_folder_obs_map, exist_ok=True,
             )
-            belief_agent.obs_map.save_occupancy_map(os.path.join(save_folder_obs_map, f"map_{step}.png"))
+            # belief_agent.obs_map.save_occupancy_map(os.path.join(save_folder_obs_map, f"map_{step}.png"))
 
-            goals = belief_agent.sample_next_exploration_goals(belief_agent.obs_map, belief_agent.current_pose[:3, 3].detach().cpu().numpy())
+            goals = belief_agent.sample_next_exploration_goals(
+                belief_agent.obs_map, 
+                belief_agent.current_pose[:3, 3].detach().cpu().numpy(),
+                plot_path=os.path.join(save_folder_obs_map, f"map_{step}.png")
+            )   
             print("# Goals", len(goals))
             goal_dict = goals[0]
             path = goal_dict["path"]
@@ -330,7 +325,7 @@ def run_planner(cfg: DictConfig):
             os.makedirs(
                 save_folder_imagine, exist_ok=True,
             )
-            frames = belief_agent.imagine_in_place(poses[-1])
+            frames, _, _ = belief_agent.imagine_in_place(poses[-1])
 
             # save all frames
             for p, frame in enumerate(frames):
@@ -342,31 +337,55 @@ def run_planner(cfg: DictConfig):
             path_habitat = BeliefAgent.points_belief2habitat(path, first_pose_habitat)
             path_habitat_exe = path_habitat[:len(path_habitat)//4+1]
 
-            # figure out your action/arg keys once
-            act_name = "agent_1_oracle_coord_action"
-            # prefix = env.task.get_action(act_name)._action_arg_prefix
-
             trajectory = []
-            for goal in path_habitat_exe:
-                # choose mode:
-                #   0 -> step the agent incrementally along the computed path
-                #   1 -> teleport the agent instantly to `goal`
-                mode = 1
 
-                action = {
-                    "action": act_name,
-                    "action_args": {
-                        # supply the 3D target
-                        f"agent_1_coord": goal.tolist(),
-                        # tell the action whether to step or teleport
-                        f"agent_1_mode": mode
-                    }
+            hl_action_name = "NavigatePose"
+
+            debug_frames = []
+
+            # for goal in path_habitat_exe:
+            hl_action_input = path_habitat_exe[-1]
+            hl_action_done = False
+            print(f"Navigating to {hl_action_input}")
+
+            while not hl_action_done:
+                # Get response and/or low level actions
+                low_level_action, response = eval_runner.planner.agents[
+                    1
+                ].process_high_level_action(
+                    hl_action_name, hl_action_input, observations
+                )
+                low_level_action = {1: low_level_action}
+
+                obs, _, _, _ = env_interface.step(
+                    low_level_action, room_name=current_room.name
+                )
+                observations = env_interface.parse_observations(obs)
+                frames_concat = eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
+                frames_concat = np.ascontiguousarray(frames_concat)
+                debug_frames.append(frames_concat)
+                
+                if response:
+                    print(f"\tResponse: {response}")
+                    hl_action_done = True
+
+            trajectory.append(
+                {
+                    "action": low_level_action,
                 }
-
-                # this single env.step will either drive the agent all the way to 'goal'
-                # (mode=0) or teleport it there (mode=1)
-                obs = env.step(action)
-                trajectory.append((action, obs))
+            )
+            # save video
+            save_folder_video = os.path.join(save_folder_sample, f'nav_video_{step}')
+            os.makedirs(
+                save_folder_video, exist_ok=True,
+            )
+            video_path = os.path.join(save_folder_video, f"nav_video.mp4")
+            imageio.mimwrite(
+                video_path,
+                debug_frames,
+                fps=10,
+                quality=10,
+            )
             step+=1
 
         break
@@ -393,6 +412,7 @@ if __name__ == "__main__":
                 "model.encoder.use_reg_model=True",
                 "model.encoder.d_semantic=512",
                 "model.encoder.d_semantic_reg=384",
+                "model.encoder.inference_mode=True",
                 "model.encoder.backbone.view_attn_n_layers=4",
                 "model.encoder.backbone.use_diff_pos_embed=True",
                 "model.encoder.backbone.use_camera_pose=True",

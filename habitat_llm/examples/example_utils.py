@@ -60,6 +60,8 @@ class DebugVideoUtil:
                     # if "0" in obs_name or "main_agent" in obs_name:
                     images.append(obs_value)
                 else:
+                    if "0" in obs_name:
+                        continue  # Skip the first agent's observation
                     # print("Multiple agents")
                     images.append(obs_value)
 
