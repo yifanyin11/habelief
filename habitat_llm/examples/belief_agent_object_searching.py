@@ -20,6 +20,8 @@ import torch.nn.functional as F
 import numpy as np
 from PIL import Image
 import imageio
+from copy import deepcopy
+import math
 
 ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)
 sys.path.append(ROOT_DIR)
@@ -50,6 +52,7 @@ from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 
 from pixelbelief.belief_agent import BeliefAgent, prepare_video
 from pixelbelief.occupancy import OccupancyMap
+from rollout_utils import unnormalize_intrinsic, visualize_semantic_query_intensity_map
 
 def get_agent_room_name(env_interface: EnvironmentInterface):
     world_graph = env_interface.full_world_graph
@@ -150,6 +153,8 @@ def pose_habitat2belief(extrinsics, first_pose):
 def run_planner(cfg: DictConfig):
     run_dir = cfg.results_folder
     save_scene = cfg.agent.save_scene
+    num_imagined_trajectories = cfg.agent.num_imagined_trajectories
+    semantic_thred = cfg.agent.semantic_thred
     # Initialize the belief agent
     belief_agent = BeliefAgent(cfg)
     belief_agent.reset()
@@ -205,11 +210,11 @@ def run_planner(cfg: DictConfig):
 
     # Initialize the environment interface for the agent
     dataset = CollaborationDatasetV0(config.habitat.dataset)
-    # if config.get("episode_indices", None) is not None:
-    #     episode_subset = [dataset.episodes[x] for x in config.episode_indices]
-    #     dataset = CollaborationDatasetV0(
-    #         config=config.habitat.dataset, episodes=episode_subset
-    #     )
+    if config.get("episode_indices", None) is not None:
+        episode_subset = [dataset.episodes[x] for x in config.episode_indices]
+        dataset = CollaborationDatasetV0(
+            config=config.habitat.dataset, episodes=episode_subset
+        )
     env_interface = EnvironmentInterface(config, dataset=dataset)
 
     # Instantiate the agent planner
@@ -236,16 +241,71 @@ def run_planner(cfg: DictConfig):
         cur_episode = env_interface.env.env.env._env.current_episode
         cur_episode.episode_id = idx
         scene_id = cur_episode.scene_id
+        target_obj = "table" # target object to search for
 
         print(
             f"Processing scene: {scene_id}, episode: {idx+1}/{num_episodes}, processed scenes: {len(processed_scenes)}"
         )
-
+        
+        # create save folders
         save_folder_sample = os.path.join(run_dir, f"visuals_{idx}")
         os.makedirs(
             save_folder_sample, exist_ok=True,
         )
 
+        save_folder_observed = os.path.join(save_folder_sample, f'observation')
+        os.makedirs(
+            save_folder_observed, exist_ok=True,
+        )
+
+        save_folder_planning = os.path.join(save_folder_sample, f'planning')
+        os.makedirs(
+            save_folder_planning, exist_ok=True,
+        )
+
+        save_folder_nav_video = os.path.join(save_folder_sample, f'nav_video')
+        os.makedirs(
+            save_folder_nav_video, exist_ok=True,
+        )
+
+        save_folder_direct= os.path.join(save_folder_planning, f'direct')
+        os.makedirs(
+            save_folder_direct, exist_ok=True,
+        )
+
+        save_folder_imagined= os.path.join(save_folder_planning, f'imagined')
+        os.makedirs(
+            save_folder_imagined, exist_ok=True,
+        )
+
+        save_folder_obs = os.path.join(save_folder_observed, f'obs_frames')
+        os.makedirs(
+            save_folder_obs, exist_ok=True,
+        )
+
+        # DEBUG
+        save_folder_obs_semantics = os.path.join(save_folder_observed, f'obs_semantics')
+        os.makedirs(
+            save_folder_obs_semantics, exist_ok=True,
+        )
+        ## DEBUG
+
+        save_folder_obs_map = os.path.join(save_folder_imagined, f'obs_map')
+        os.makedirs(
+            save_folder_obs_map, exist_ok=True,
+        )
+
+        save_folder_height_map = os.path.join(save_folder_imagined, f'height_map')
+        os.makedirs(
+            save_folder_height_map, exist_ok=True,
+        )
+
+        save_folder_imagine = os.path.join(save_folder_imagined, f'imagined_frames')
+        os.makedirs(
+            save_folder_imagine, exist_ok=True,
+        )
+        
+        # get current observation
         observations = env_interface.get_observations()
 
         # get the list of all rooms in this house
@@ -257,10 +317,9 @@ def run_planner(cfg: DictConfig):
         hl_action_name = "Explore"
         hl_action_input = current_room.name
         hl_action_done = False
-        print(f"Navigating to {hl_action_input}")
+        print(f"Navigating to {hl_action_input}") # TODO teleport to a given pose
 
         while not hl_action_done:
-            # Get response and/or low level actions
             env_interface.reset_world_graph()
             low_level_action, response = eval_runner.planner.agents[
                 1
@@ -277,79 +336,211 @@ def run_planner(cfg: DictConfig):
         
         first_pose_habitat = None
         step = 0
-        for step in range(5):
-            # Extract obs
+        for step in range(5): # TODO Set a max number of steps to explore
+            # Extract current obs
             habitat_obs = extract_obs(env_interface, obs)
 
-            if step==0:
+            if step == 0:
                 first_pose_habitat = habitat_obs["pose"]
-            
-            save_folder_obs = os.path.join(save_folder_sample, f'obs_frames')
-            os.makedirs(
-                save_folder_obs, exist_ok=True,
-            )
 
             Image.fromarray(habitat_obs["rgb"]).save(
                 os.path.join(save_folder_obs, f"rendered_{step}.png")
             )
-
+            
             belief_obs = BeliefAgent.convert_to_belief_obs(habitat_obs, first_pose_habitat)
             
+            # observe with the current observation
             belief_agent.observe([belief_obs["rgb"]], [belief_obs["pose"]])
-
-            save_folder_obs_map = os.path.join(save_folder_sample, f'obs_map')
-            os.makedirs(
-                save_folder_obs_map, exist_ok=True,
-            )
-            # belief_agent.obs_map.save_occupancy_map(os.path.join(save_folder_obs_map, f"map_{step}.png"))
-
-            goals = belief_agent.sample_next_exploration_goals(
-                belief_agent.obs_map, 
-                belief_agent.current_pose[:3, 3].detach().cpu().numpy(),
-                plot_path=os.path.join(save_folder_obs_map, f"map_{step}.png")
-            )   
-            print("# Goals", len(goals))
-            goal_dict = goals[0]
-            path = goal_dict["path"]
-            poses = goal_dict["pose"]
-
-            save_folder_height_map = os.path.join(save_folder_sample, f'height_map')
-            os.makedirs(
-                save_folder_height_map, exist_ok=True,
-            )
-            belief_agent.obs_map.save_height_map(
-                os.path.join(save_folder_height_map, f"height_map_with_goals{step}.png"), path=path
+            # render at the current pose
+            _, depth, semantic = belief_agent.render_image(extrinsics=belief_obs["pose"], query_label=target_obj)
+            # find object center at the max semantic value
+            semantic = semantic[0]
+            # DEBUG save semantic map
+            semantic_viz = visualize_semantic_query_intensity_map(semantic) # np array
+            semantic_viz = np.ascontiguousarray(semantic_viz)
+            Image.fromarray(semantic_viz).save(
+                os.path.join(save_folder_obs_semantics, f"semantic_{step}.png")
             )
 
-            save_folder_imagine = os.path.join(save_folder_sample, f'imagined_frames{step}')
-            os.makedirs(
-                save_folder_imagine, exist_ok=True,
-            )
-            frames, _, _ = belief_agent.imagine_in_place(poses[-1])
+            max_semantic_score = np.max(semantic)
 
-            # save all frames
-            for p, frame in enumerate(frames):
-                Image.fromarray(frame).save(
-                    os.path.join(save_folder_imagine, f"rendered_{p}.png")
+            # If new observation contains the target object, set goal to that point
+            if max_semantic_score > semantic_thred:
+                obj_center = np.unravel_index(np.argmax(semantic), semantic.shape)
+                print(f"Object center: {obj_center}, max semantic score: {max_semantic_score}")
+                depth_val = depth[0][obj_center[0], obj_center[1]] - 0.5 # offset
+                # build the homogeneous pixel
+                pix_h = np.array([obj_center[0], obj_center[1], 1.0], dtype=float)
+                # unproject to camera frame
+                cam_point = depth_val * np.linalg.inv(unnormalize_intrinsic(belief_agent.camera.intrinsics, 
+                                        width=belief_agent.camera.w, height=belief_agent.camera.h)) @ pix_h
+
+                cam_hom = np.ones(4, dtype=float)
+                cam_hom[:3] = cam_point
+
+                world_hom = belief_obs["pose"] @ cam_hom
+                goal = world_hom[:3]
+                path = belief_agent.obs_map.plan(
+                    start=belief_obs["pose"][:3, 3].detach().cpu().numpy(),
+                    goal=goal.detach().cpu().numpy()
+                )
+                if path is None:
+                    print("No path found, using interpolation.")
+                    path = belief_agent.interpolate_path(
+                        belief_obs["pose"][:3, 3].detach().cpu().numpy(),
+                        goal,
+                        step_size=0.05,
+                    )
+                # save the height map with the path
+                belief_agent.obs_map.save_height_map(
+                    os.path.join(save_folder_direct, f"direct_plan_height_map_{step}.png"), path=path
                 )
 
-            # poses_habitat = [BeliefAgent.pose_belief2habitat(pose, first_pose_habitat) for pose in poses]
-            path_habitat = BeliefAgent.points_belief2habitat(path, first_pose_habitat)
-            path_habitat_exe = path_habitat[:len(path_habitat)//4+1]
+            else: # Otherwise, continue exploring and imagining
+                goals = belief_agent.sample_next_exploration_goals(
+                    belief_agent.obs_map, 
+                    belief_agent.current_pose[:3, 3].detach().cpu().numpy(),
+                    plot_path=os.path.join(save_folder_obs_map, f"map_{step}.png")
+                )   
+                print("# Goals", len(goals))
 
+                # keep at most num_imagined_trajectories goals
+                if len(goals) > num_imagined_trajectories:
+                    goals = random.sample(goals, num_imagined_trajectories)
+                
+                save_folder_imagine_step = os.path.join(save_folder_imagine, f'step_{step}')
+                os.makedirs(
+                    save_folder_imagine_step, exist_ok=True,
+                )
+
+                optimal_goal = None
+                optimal_key_poses = None
+                optimal_belief_scene = None
+                best_semantic_score = -1
+                for gidx, goal_dict in enumerate(goals):
+                    path = goal_dict["path"]
+                    poses = goal_dict["pose"]
+
+                    belief_agent.obs_map.save_height_map(
+                        os.path.join(save_folder_height_map, f"height_map_with_goals_{step}_{gidx}.png"), path=path
+                    )
+
+                    save_folder_imagine_step_goal = os.path.join(save_folder_imagine_step, f'goal_{gidx}')
+                    os.makedirs(
+                        save_folder_imagine_step_goal, exist_ok=True,
+                    )
+
+                    # 3D imagination
+                    key_output, _, belief_scene = belief_agent.imagine_in_place(poses[-1], query_label=target_obj)
+
+                    frames = key_output.rgb
+                    depths = key_output.depth
+                    semantics = key_output.semantic
+                    key_poses = key_output.pose
+                    
+                    semantic_scores = [np.max(semantic[0]) for semantic in semantics]
+            
+                    max_idx = np.argmax(semantic_scores)
+                    semantic_score = semantic_scores[max_idx]
+                    
+                    for p, (frame, semantic) in enumerate(zip(frames, semantics)):
+                        Image.fromarray(frame).save(
+                            os.path.join(save_folder_imagine_step_goal, f"rendered_{p}.png")
+                        )
+                        # DEBUG
+                        semantic_viz = visualize_semantic_query_intensity_map(semantic[0]) # np array
+                        semantic_viz = np.ascontiguousarray(semantic_viz)
+                        Image.fromarray(semantic_viz).save(
+                            os.path.join(save_folder_imagine_step_goal, f"semantic_{p}.png")
+                        )
+                        ## DEBUG
+                    
+                    if semantic_score > best_semantic_score:
+                        best_semantic_score = semantic_score
+                        optimal_key_poses = key_poses
+                        optimal_belief_scene = belief_scene
+                        object_center = np.unravel_index(
+                            np.argmax(semantics[max_idx][0]), semantics[max_idx][0].shape
+                        )
+                        depth_val = depths[max_idx][0][object_center[0], object_center[1]] - 0.5 # offset
+                        # build the homogeneous pixel
+                        pix_h = np.array([obj_center[0], obj_center[1], 1.0], dtype=float)
+                        # unproject to camera frame
+                        cam_point = depth_val * np.linalg.inv(unnormalize_intrinsic(belief_agent.camera.intrinsics, 
+                                                width=belief_agent.camera.w, height=belief_agent.camera.h)) @ pix_h
+
+                        cam_hom = np.ones(4, dtype=float)
+                        cam_hom[:3] = cam_point
+
+                        world_hom = key_poses[max_idx] @ cam_hom
+                        goal = world_hom[:3]
+                        optimal_goal = goal # TODO what if all goals have low semantic score
+                
+                # set imagined occupancy map
+                obs_map = deepcopy(belief_agent.obs_map)
+                assert len(optimal_key_poses) == len(optimal_belief_scene)
+                for i in range(len(optimal_key_poses)):
+                    inc_map = OccupancyMap(resolution=belief_agent.step_size, obstacle_height_thresh=belief_agent.obstacle_height_thresh)
+                    obs_pose_np = optimal_key_poses[i].detach().cpu().numpy()
+                    Rcw = obs_pose_np[:3, :3]
+                    forward = Rcw @ np.array([0.0, 0.0, 1.0])
+                    yaw = -math.atan2(forward[0], forward[2])
+                    yaw = yaw % (2*math.pi)
+                    inc_map.set_point_cloud(
+                        pcd=optimal_belief_scene[i].float().means.squeeze(0).detach().cpu().numpy(), 
+                        sensor_origin=tuple(obs_pose_np[:3, 3]), 
+                        yaw=yaw, 
+                        intrinsics=belief_agent.camera.intrinsics
+                    )
+                    obs_map.merge(inc_map)
+                
+                # DEBUG save the occupancy map
+                obs_map.save_occupancy_map(
+                    os.path.join(save_folder_obs_map, f"imagined_plan_obs_map_{step}.png"),
+                    goals=[optimal_goal],
+                )
+                ## DEBUG
+
+                # plan the path
+                path = obs_map.plan(
+                    start=belief_obs["pose"][:3, 3].detach().cpu().numpy(),
+                    goal=optimal_goal.detach().cpu().numpy(),
+                )
+                if path is None:
+                    print("No path found, using interpolation.")
+                    path = belief_agent.interpolate_path(
+                        belief_obs["pose"][:3, 3].detach().cpu().numpy(),
+                        optimal_goal,
+                        step_size=0.05,
+                    )
+
+            # check total distance from the start to the goal
+            assert len(path) > 0, "Path is empty, no path found."
+            path_distance = np.linalg.norm(
+                path[-1] - belief_obs["pose"][:3, 3].detach().cpu().numpy()
+            )
+            print(f"Path distance: {path_distance}")
+            if path_distance < 0.5:
+                face_to_obj = True
+            else:
+                face_to_obj = False
+
+            path_habitat = BeliefAgent.points_belief2habitat(path, first_pose_habitat)
+            path_habitat_exe = path_habitat[:len(path_habitat)//4+1] # TODO find a subset of the path with step size
+
+            # Navigate following a subset of the path
             trajectory = []
 
             hl_action_name = "NavigatePose"
 
             debug_frames = []
 
-            # for goal in path_habitat_exe:
             hl_action_input = path_habitat_exe[-1]
             hl_action_done = False
             print(f"Navigating to {hl_action_input}")
+            hl_action_input = (hl_action_input, face_to_obj)
 
             while not hl_action_done:
-                # Get response and/or low level actions
                 low_level_action, response = eval_runner.planner.agents[
                     1
                 ].process_high_level_action(
@@ -364,10 +555,12 @@ def run_planner(cfg: DictConfig):
                 frames_concat = eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
                 frames_concat = np.ascontiguousarray(frames_concat)
                 debug_frames.append(frames_concat)
-
+                
                 if response:
                     print(f"\tResponse: {response}")
                     hl_action_done = True
+                
+                # TODO: check if the agent has reached the target object
 
             trajectory.append(
                 {
@@ -375,11 +568,7 @@ def run_planner(cfg: DictConfig):
                 }
             )
             # save video
-            save_folder_video = os.path.join(save_folder_sample, f'nav_video_{step}')
-            os.makedirs(
-                save_folder_video, exist_ok=True,
-            )
-            video_path = os.path.join(save_folder_video, f"nav_video.mp4")
+            video_path = os.path.join(save_folder_nav_video, f"nav_video_{step}.mp4")
             imageio.mimwrite(
                 video_path,
                 debug_frames,
@@ -403,6 +592,9 @@ if __name__ == "__main__":
         cfg = compose(
             config_name="sp_reason.yaml",
             overrides=[
+                "sampling_steps=20",
+                "semantic_mode=embed",
+                "semantic_viz=query",
                 "model.encoder.use_epipolar_transformer=False",
                 "model.encoder.use_image_condition=True",
                 "model.encoder.depth_predictor_time_embed=True",
@@ -412,15 +604,16 @@ if __name__ == "__main__":
                 "model.encoder.use_reg_model=True",
                 "model.encoder.d_semantic=512",
                 "model.encoder.d_semantic_reg=384",
+                "model.encoder.gaussians_per_pixel=1",
                 "model.encoder.inference_mode=True",
                 "model.encoder.backbone.view_attn_n_layers=4",
                 "model.encoder.backbone.use_diff_pos_embed=True",
                 "model.encoder.backbone.use_camera_pose=True",
                 "model.encoder.backbone.use_image_condition=True",
-                "agent.save_scene=True",
+                "agent.save_scene=False",
             ]
         )
-    cfg.checkpoint_path = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/weights/model-7.pt"
+    cfg.checkpoint_path = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/weights/semantic/model-14.pt"
     cfg.results_folder = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/belief_agent"
     cfg.semantic_config = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/configurations/semantic/onehot.yaml"
 

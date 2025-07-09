@@ -65,6 +65,8 @@ class OracleNavPoseSkill(SkillPolicy):
             self.agent_uid
         ].articulated_agent
 
+        self.face_to_obj = False
+
         self.do_teleport = False
         if "teleport" in config:
             self.do_teleport = config.teleport
@@ -162,6 +164,9 @@ class OracleNavPoseSkill(SkillPolicy):
         # Early return if the target is already set
         if self.target_is_set:
             return
+        
+        target_position, face_to_obj = target_position
+        self.face_to_obj = face_to_obj
 
         # Convert target_position to mn.Vector3 if it's not already
         if not isinstance(target_position, mn.Vector3):
@@ -224,7 +229,7 @@ class OracleNavPoseSkill(SkillPolicy):
                 island_id=self.env.sim._largest_indoor_island_idx,  # from RearrangeSim
                 min_sample_dist=0.25,  # approximates agent radius, doesn't need to be precise
                 agent_embodiment=self.articulated_agent,
-                orientation_noise=0.1,  # allow a bit of variation in body orientation
+                orientation_noise=0.0,  # allow a bit of variation in body orientation
             )
 
             if success:
@@ -349,10 +354,15 @@ class OracleNavPoseSkill(SkillPolicy):
         target_base_pos_np = np.array(self.target_base_pos, dtype=np.float32)
         delta = target_base_pos_np - robot_pos_np
         dist_to_final_nav_targ = np.linalg.norm(delta[[0, 2]])
-        at_goal = (
-            dist_to_final_nav_targ < self.dist_thresh
-            and angle_to_obj < self.turn_thresh
-        )
+        if self.face_to_obj:
+            at_goal = (
+                dist_to_final_nav_targ < self.dist_thresh
+                and angle_to_obj < self.turn_thresh
+            )
+        else:
+            at_goal = (
+                dist_to_final_nav_targ < self.dist_thresh
+            )
 
         if self.motion_type == "base_velocity":
             # Planning to see if the robot needs to do back-up
@@ -387,10 +397,15 @@ class OracleNavPoseSkill(SkillPolicy):
                 target_base_pos_np = np.array(self.target_base_pos, dtype=np.float32)
                 delta = target_base_pos_np - robot_pos_np
                 dist_to_final_nav_targ = np.linalg.norm(delta[[0, 2]])
-                at_goal = (
-                    dist_to_final_nav_targ < self.dist_thresh
-                    and angle_to_obj < self.turn_thresh
-                )
+                if self.face_to_obj:
+                    at_goal = (
+                        dist_to_final_nav_targ < self.dist_thresh
+                        and angle_to_obj < self.turn_thresh
+                    )
+                else:
+                    at_goal = (
+                        dist_to_final_nav_targ < self.dist_thresh
+                    )
 
             if not at_goal:
                 if dist_to_final_nav_targ < self.dist_thresh:
