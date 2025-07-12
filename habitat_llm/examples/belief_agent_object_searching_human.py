@@ -21,7 +21,6 @@ import numpy as np
 from PIL import Image
 import imageio
 from copy import deepcopy
-import math
 
 ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)
 sys.path.append(ROOT_DIR)
@@ -32,6 +31,8 @@ sys.path.append("..")
 from typing import Any, Dict
 from omegaconf import DictConfig, OmegaConf
 from hydra import initialize_config_dir, compose
+from habitat.tasks.nav.shortest_path_follower import ShortestPathFollower  
+from habitat.sims.habitat_simulator.actions import HabitatSimActions
 
 from habitat_llm.utils import cprint, setup_config
 
@@ -48,7 +49,6 @@ from habitat_llm.world_model import Room
 from habitat_llm.utils.core import get_config
 from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 
-from agents.perception import object_detection
 from pixelbelief.belief_agent import BeliefAgent, prepare_video
 from pixelbelief.occupancy import OccupancyMap
 from rollout_utils import unnormalize_intrinsic, visualize_semantic_query_intensity_map
@@ -60,12 +60,13 @@ def get_agent_room_name(env_interface: EnvironmentInterface):
 def extract_obs(env_interface: EnvironmentInterface, obs: Dict[str, Any]):
 
     curr_agent, camera_source = env_interface.trajectory_agent_names[0], env_interface.conf.trajectory.camera_prefixes[0]
-    # assert curr_agent=='agent_1'
+
+    assert curr_agent=='agent_1'
 
     if env_interface._single_agent_mode:
         rgb = obs[f"{camera_source}_rgb"]
         depth = obs[f"{camera_source}_depth"]
-        # panoptic = obs[f"{camera_source}_panoptic"]
+        panoptic = obs[f"{camera_source}_panoptic"]
         pose = np.linalg.inv(
             env_interface.sim.agents[0]
             ._sensors[f"{camera_source}_rgb"]
@@ -74,7 +75,7 @@ def extract_obs(env_interface: EnvironmentInterface, obs: Dict[str, Any]):
     else:
         rgb = obs[f"{curr_agent}_{camera_source}_rgb"]
         depth = obs[f"{curr_agent}_{camera_source}_depth"]
-        # panoptic = obs[f"{curr_agent}_{camera_source}_panoptic"]
+        panoptic = obs[f"{curr_agent}_{camera_source}_panoptic"]
         pose = np.linalg.inv(
             env_interface.sim.agents[0]
             ._sensors[f"{curr_agent}_{camera_source}_rgb"]
@@ -84,7 +85,7 @@ def extract_obs(env_interface: EnvironmentInterface, obs: Dict[str, Any]):
     extracted_obs = {
         "rgb": rgb,
         "depth": depth,
-        # "panoptic": panoptic,
+        "panoptic": panoptic,
         "pose": pose
     }
 
@@ -118,7 +119,7 @@ def convert_to_belief_obs(habitat_obs, first_pose, image_size=64):
     belief_obs = {
         "rgb": rgb,
         "depth": depth,
-        # "panoptic": habitat_obs["panoptic"], # unchanged for now
+        "panoptic": habitat_obs["panoptic"], # unchanged for now
         "pose": pose
     }
 
@@ -166,7 +167,8 @@ def run_planner(cfg: DictConfig):
         "habitat.dataset.scenes_dir=data/hssd-hab/",
     ]
     SENSOR_OVERRIDES = [
-        "habitat.simulator.agents.main_agent.sim_sensors.jaw_depth_sensor.normalize_depth=False",
+        "habitat.simulator.agents.agent_0.sim_sensors.jaw_depth_sensor.normalize_depth=False",
+        "habitat.simulator.agents.agent_1.sim_sensors.head_depth_sensor.normalize_depth=False"
     ]
     LLM_OVERRIDES = [
         "llm@evaluation.planner.plan_config.llm=mock",
@@ -175,7 +177,7 @@ def run_planner(cfg: DictConfig):
         "evaluation.save_video=True",
         "evaluation.output_dir=./outputs",
         "trajectory.save=True",
-        "trajectory.agent_names=[main_agent]",
+        "trajectory.agent_names=[agent_1]",
         "trajectory.save_path=data/trajectories/habelief/test/",
     ]
 
@@ -186,7 +188,7 @@ def run_planner(cfg: DictConfig):
 
     # Setup config
     config_base = get_config(
-        "examples/single_agent_scene_mapping.yaml",
+        "examples/multi_agent_scene_mapping.yaml",
         overrides=DATASET_OVERRIDES
         + SENSOR_OVERRIDES
         + LLM_OVERRIDES
@@ -207,11 +209,11 @@ def run_planner(cfg: DictConfig):
 
     # Initialize the environment interface for the agent
     dataset = CollaborationDatasetV0(config.habitat.dataset)
-    # if config.get("episode_indices", None) is not None:
-    #     episode_subset = [dataset.episodes[x] for x in config.episode_indices]
-    #     dataset = CollaborationDatasetV0(
-    #         config=config.habitat.dataset, episodes=episode_subset
-    #     )
+    if config.get("episode_indices", None) is not None:
+        episode_subset = [dataset.episodes[x] for x in config.episode_indices]
+        dataset = CollaborationDatasetV0(
+            config=config.habitat.dataset, episodes=episode_subset
+        )
     env_interface = EnvironmentInterface(config, dataset=dataset)
 
     # Instantiate the agent planner
@@ -229,7 +231,7 @@ def run_planner(cfg: DictConfig):
     num_episodes = len(env_interface.env.episodes)
     processed_scenes = {}
     robot_agent_uid = config.robot_agent_uid
-    room_type = "dining_room"
+    room_type = "kitchen"
 
     # initial reset to load first episode
     for idx in range(num_episodes):
@@ -250,62 +252,37 @@ def run_planner(cfg: DictConfig):
             save_folder_sample, exist_ok=True,
         )
 
+        save_folder_obs = os.path.join(save_folder_sample, f'obs_frames')
+        os.makedirs(
+            save_folder_obs, exist_ok=True,
+        )
+
+        save_folder_obs_map = os.path.join(save_folder_sample, f'obs_map')
+        os.makedirs(
+            save_folder_obs_map, exist_ok=True,
+        )
+
+        save_folder_height_map = os.path.join(save_folder_sample, f'height_map')
+        os.makedirs(
+            save_folder_height_map, exist_ok=True,
+        )
+
+        save_folder_imagine = os.path.join(save_folder_sample, f'imagined_frames')
+        os.makedirs(
+            save_folder_imagine, exist_ok=True,
+        )
+        
         save_folder_nav_video = os.path.join(save_folder_sample, f'nav_video')
         os.makedirs(
             save_folder_nav_video, exist_ok=True,
         )
 
-        save_folder_observation = os.path.join(save_folder_sample, f'observation')
-        os.makedirs(
-            save_folder_observation, exist_ok=True,
-        )
-
-        save_folder_planning = os.path.join(save_folder_sample, f'planning')
-        os.makedirs(
-            save_folder_planning, exist_ok=True,
-        )
-
-        save_folder_obs = os.path.join(save_folder_observation, f'obs_frames')
-        os.makedirs(
-            save_folder_obs, exist_ok=True,
-        )
-
-        save_folder_direct = os.path.join(save_folder_planning, f'direct')
-        os.makedirs(
-            save_folder_direct, exist_ok=True,
-        )
-
-        save_folder_imagined = os.path.join(save_folder_planning, f'imagined')
-        os.makedirs(
-            save_folder_imagined, exist_ok=True,
-        )
-
         # DEBUG
-        save_folder_obs_semantics = os.path.join(save_folder_direct, f'obs_semantics')
+        save_folder_obs_semantics = os.path.join(save_folder_sample, f'obs_semantics')
         os.makedirs(
             save_folder_obs_semantics, exist_ok=True,
         )
         ## DEBUG
-
-        save_folder_height_map_direct = os.path.join(save_folder_direct, f'height_map')
-        os.makedirs(
-            save_folder_height_map_direct, exist_ok=True,
-        )
-
-        save_folder_height_map = os.path.join(save_folder_imagined, f'height_map')
-        os.makedirs(
-            save_folder_height_map, exist_ok=True,
-        )
-
-        save_folder_imagine = os.path.join(save_folder_imagined, f'imagined_frames')
-        os.makedirs(
-            save_folder_imagine, exist_ok=True,
-        )
-
-        save_folder_obs_map = os.path.join(save_folder_imagined, f'obs_map')
-        os.makedirs(
-            save_folder_obs_map, exist_ok=True,
-        )
 
         # get current observation
         observations = env_interface.get_observations()
@@ -324,11 +301,11 @@ def run_planner(cfg: DictConfig):
         while not hl_action_done:
             env_interface.reset_world_graph()
             low_level_action, response = eval_runner.planner.agents[
-                0
+                1
             ].process_high_level_action(
                 hl_action_name, hl_action_input, observations
             )
-            low_level_action = {0: low_level_action}
+            low_level_action = {1: low_level_action}
 
             obs, _, _, _ = env_interface.step(
                 low_level_action, room_name=current_room.name
@@ -346,7 +323,7 @@ def run_planner(cfg: DictConfig):
                 first_pose_habitat = habitat_obs["pose"]
 
             Image.fromarray(habitat_obs["rgb"]).save(
-                os.path.join(save_folder_obs, f"observed_{step}.png")
+                os.path.join(save_folder_obs, f"rendered_{step}.png")
             )
             
             belief_obs = BeliefAgent.convert_to_belief_obs(habitat_obs, first_pose_habitat)
@@ -383,7 +360,7 @@ def run_planner(cfg: DictConfig):
                 world_hom = belief_obs["pose"] @ cam_hom
                 goal = world_hom[:3]
                 # Sample a path to the goal by interpolating the goal and current pose
-                path = belief_agent.obs_map.plan(tuple(belief_obs["pose"][:3, 3].detach().cpu().numpy()), tuple(goal.detach().cpu().numpy()))
+                path = belief_agent.obs_map.plan(tuple(belief_obs["pose"][:3, 3].detach().cpu().numpy()), tuple(goal))
                 if path is None:
                     print("Failed to plan a path to the goal, using interpolation.")
                     path = belief_agent.interpolate_path(
@@ -391,10 +368,6 @@ def run_planner(cfg: DictConfig):
                         goal,
                         step_size=0.05,
                     )
-                # save height map with the path
-                belief_agent.obs_map.save_height_map(
-                    os.path.join(save_folder_height_map_direct, f"direct_plan_height_map_{step}.png"), path=path
-                )
             else: # Otherwise, continue exploring and imagining
                 goals = belief_agent.sample_next_exploration_goals(
                     belief_agent.obs_map, 
@@ -466,7 +439,7 @@ def run_planner(cfg: DictConfig):
                         )
                         depth_val = depths[max_idx][0][object_center[0], object_center[1]] - 0.5 # offset
                         # build the homogeneous pixel
-                        pix_h = np.array([object_center[0], object_center[1], 1.0], dtype=float)
+                        pix_h = np.array([obj_center[0], obj_center[1], 1.0], dtype=float)
                         # unproject to camera frame
                         cam_point = depth_val * np.linalg.inv(unnormalize_intrinsic(belief_agent.camera.intrinsics, 
                                                 width=belief_agent.camera.w, height=belief_agent.camera.h)) @ pix_h
@@ -503,7 +476,7 @@ def run_planner(cfg: DictConfig):
                 )
 
                 # plan a path to the goal
-                path = obs_map.plan(tuple(belief_obs["pose"][:3, 3].detach().cpu().numpy()), tuple(optimal_goal.detach().cpu().numpy()))
+                path = obs_map.plan(tuple(belief_obs["pose"][:3, 3].detach().cpu().numpy()), tuple(optimal_goal))
                 if path is None:
                     print("Failed to plan a path to the goal, using interpolation.")
                     path = belief_agent.interpolate_path(
@@ -511,7 +484,7 @@ def run_planner(cfg: DictConfig):
                         optimal_goal,
                         step_size=0.05, # TODO set a step size
                     )
-            
+
             # Calculate the path distance between start and goal
             if path is not None:
                 path_distance = np.linalg.norm(
@@ -521,7 +494,7 @@ def run_planner(cfg: DictConfig):
                     face_to_object = True
                 else:
                     face_to_object = False
-            
+
             path_habitat = BeliefAgent.points_belief2habitat(path, first_pose_habitat)
             path_habitat_exe = path_habitat[:len(path_habitat)//4+1] # TODO find a subset of the path with step size
 
@@ -539,11 +512,11 @@ def run_planner(cfg: DictConfig):
 
             while not hl_action_done:
                 low_level_action, response = eval_runner.planner.agents[
-                    0
+                    1
                 ].process_high_level_action(
                     hl_action_name, hl_action_input, observations
                 )
-                low_level_action = {0: low_level_action}
+                low_level_action = {1: low_level_action}
 
                 obs, _, _, _ = env_interface.step(
                     low_level_action, room_name=current_room.name

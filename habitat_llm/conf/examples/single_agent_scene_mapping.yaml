@@ -1,18 +1,20 @@
 # @package _global_
 defaults:
   - /training@             : base_train
-  - /habitat_conf          : oracle_spot_kinematic
+  - /habitat_conf          : oracle_stretch_kinematic
   - /habitat_conf/task     : rearrange_single_agent_mapping
   - /evaluation            : centralized_evaluation_runner_single_agent
   - /world_model@world_model: gt_graph
   - /trajectory@trajectory : trajectory_logger
+
+  - /agent/@agents.main_agent.config: oracle_rearrange_agent
 
   - /wandb_conf@           : own
   - override /hydra/output : output
   - _self_
 
 world_model:
-  partial_obs: True
+  partial_obs: False
 
 robot_agent_uid: 0
 human_agent_uid: 1

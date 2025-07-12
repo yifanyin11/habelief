@@ -41,7 +41,7 @@ def run_planner():
 
     # setup required overrides
     DATASET_OVERRIDES = [
-        "habitat.dataset.data_path=data/datasets/path/to/val/scenes",
+        "habitat.dataset.data_path=data/datasets/partnr_episodes/v0_0/val_mini.json.gz",
         "habitat.dataset.scenes_dir=data/hssd-hab/",
     ]
     SENSOR_OVERRIDES = [
@@ -55,6 +55,7 @@ def run_planner():
         "evaluation.output_dir=./outputs",
         "trajectory.save=True",
         "trajectory.agent_names=[main_agent]",
+        "trajectory.save_path=data/trajectories/test/",
     ]
 
     EPISODE_OVERRIDES = [
@@ -150,9 +151,9 @@ def run_planner():
                 obs, reward, done, info = env_interface.step(low_level_action)
                 # Refresh observations
                 observations = env_interface.parse_observations(obs)
-                # Store third person frames for generating video
-                hl_dict = {0: (hl_action_name, hl_action_input)}
-                eval_runner._store_for_video(observations, hl_dict)
+                # # Store third person frames for generating video
+                # hl_dict = {0: (hl_action_name, hl_action_input)}
+                # eval_runner._store_for_video(observations, hl_dict)
 
                 # figure out how to get completion signal
                 if response:
@@ -162,8 +163,8 @@ def run_planner():
                 f"\tCompleted high-level action: {hl_action_name} on {hl_action_input}"
             )
 
-        if eval_runner.frames:
-            eval_runner._make_video(scene_id)
+        # if eval_runner.frames:
+        #     eval_runner._make_video(scene_id)
         processed_scenes.add(str(scene_id))
     env_interface.sim.close()
 

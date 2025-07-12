@@ -71,25 +71,23 @@ class OracleNavPoseSkill(SkillPolicy):
         if "teleport" in config:
             self.do_teleport = config.teleport
 
-        if self.do_teleport:
-            # Get indices for teleport action
-            target_pos_ends = find_action_range(
-                self.action_space, f"agent_{self.agent_uid}_teleport"
-            )
-            self.target_pos_range = range(target_pos_ends[0], target_pos_ends[1])
+        # Get indices for teleport action
+        target_pos_ends = find_action_range(
+            self.action_space, f"agent_{self.agent_uid}_teleport"
+        )
+        self.target_pos_range = range(target_pos_ends[0], target_pos_ends[1])
 
+        # Get indices for linear and angular velocities in the action tensor
+        if self.motion_type != "human_joints":
+            self.action_range = find_action_range(
+                self.action_space, f"agent_{self.agent_uid}_base_velocity"
+            )
         else:
-            # Get indices for linear and angular velocities in the action tensor
-            if self.motion_type != "human_joints":
-                self.action_range = find_action_range(
-                    self.action_space, f"agent_{self.agent_uid}_base_velocity"
-                )
-            else:
-                self.action_range = find_action_range(
-                    self.action_space, f"agent_{self.agent_uid}_humanoid_base_velocity"
-                )
-            self.linear_velocity_index = self.action_range[0]
-            self.angular_velocity_index = self.action_range[1] - 1
+            self.action_range = find_action_range(
+                self.action_space, f"agent_{self.agent_uid}_humanoid_base_velocity"
+            )
+        self.linear_velocity_index = self.action_range[0]
+        self.angular_velocity_index = self.action_range[1] - 1
 
     def reset(self, batch_idxs):
         super().reset(batch_idxs)
@@ -165,8 +163,9 @@ class OracleNavPoseSkill(SkillPolicy):
         if self.target_is_set:
             return
         
-        target_position, face_to_obj = target_position
+        target_position, face_to_obj, teleport = target_position
         self.face_to_obj = face_to_obj
+        self.do_teleport = teleport
 
         # Convert target_position to mn.Vector3 if it's not already
         if not isinstance(target_position, mn.Vector3):
@@ -184,7 +183,6 @@ class OracleNavPoseSkill(SkillPolicy):
                 self.termination_message = f"Error converting target position: {e}"
                 self.failed = True
                 return
-
         # Set the target position
         self.target_pos = target_position
 
@@ -211,6 +209,7 @@ class OracleNavPoseSkill(SkillPolicy):
         success = False
         # Maximum acceptable distance between target pose and navigation point
         max_pose_to_nav_point_dist = 1.8
+
         # Try up to 200 times to find a valid navigation target
         while (
             pose_to_nav_point_dist > max_pose_to_nav_point_dist or not success
@@ -434,8 +433,8 @@ class OracleNavPoseSkill(SkillPolicy):
             if need_move_backward:
                 vel[0] = -1 * vel[0]
 
-            # Reset the robot's leg joints
-            self.fix_robot_leg()
+            # # Reset the robot's leg joints
+            # self.fix_robot_leg()
 
             # Populate the actions tensor
             action[cur_batch_idx, self.linear_velocity_index] = vel[0]

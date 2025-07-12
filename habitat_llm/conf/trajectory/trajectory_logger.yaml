@@ -1,6 +1,6 @@
 save: True
 agent_names: ['agent_0']  # list of all agents to log
-camera_prefixes: ['articulated_agent_jaw']
+camera_prefixes: ['head']
 save_path: 'data/trajectories/'
 # root of dir where to log data; is considered the
 # prefix when saving trajectories for multiple scenes

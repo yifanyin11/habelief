@@ -1,0 +1,4 @@
+dataset_root: /scratch/tshu2/yyin34/projects/3d_belief/partnr-planner/habitat_llm/data/belief_tasks/nav/turn_around
+habelief_episode_root: /home/yyin34/mounts/workspace/data/trajectories/habelief/test
+close_enough_distance: 0.5
+agent_id: 0

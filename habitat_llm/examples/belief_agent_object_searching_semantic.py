@@ -32,6 +32,8 @@ sys.path.append("..")
 from typing import Any, Dict
 from omegaconf import DictConfig, OmegaConf
 from hydra import initialize_config_dir, compose
+from habitat.tasks.nav.shortest_path_follower import ShortestPathFollower  
+from habitat.sims.habitat_simulator.actions import HabitatSimActions
 
 from habitat_llm.utils import cprint, setup_config
 
@@ -166,7 +168,7 @@ def run_planner(cfg: DictConfig):
         "habitat.dataset.scenes_dir=data/hssd-hab/",
     ]
     SENSOR_OVERRIDES = [
-        "habitat.simulator.agents.main_agent.sim_sensors.jaw_depth_sensor.normalize_depth=False",
+        "habitat.simulator.agents.main_agent.sim_sensors.jaw_depth_sensor.normalize_depth=False"
     ]
     LLM_OVERRIDES = [
         "llm@evaluation.planner.plan_config.llm=mock",
@@ -250,62 +252,37 @@ def run_planner(cfg: DictConfig):
             save_folder_sample, exist_ok=True,
         )
 
+        save_folder_obs = os.path.join(save_folder_sample, f'obs_frames')
+        os.makedirs(
+            save_folder_obs, exist_ok=True,
+        )
+
+        save_folder_obs_map = os.path.join(save_folder_sample, f'obs_map')
+        os.makedirs(
+            save_folder_obs_map, exist_ok=True,
+        )
+
+        save_folder_height_map = os.path.join(save_folder_sample, f'height_map')
+        os.makedirs(
+            save_folder_height_map, exist_ok=True,
+        )
+
+        save_folder_imagine = os.path.join(save_folder_sample, f'imagined_frames')
+        os.makedirs(
+            save_folder_imagine, exist_ok=True,
+        )
+        
         save_folder_nav_video = os.path.join(save_folder_sample, f'nav_video')
         os.makedirs(
             save_folder_nav_video, exist_ok=True,
         )
 
-        save_folder_observation = os.path.join(save_folder_sample, f'observation')
-        os.makedirs(
-            save_folder_observation, exist_ok=True,
-        )
-
-        save_folder_planning = os.path.join(save_folder_sample, f'planning')
-        os.makedirs(
-            save_folder_planning, exist_ok=True,
-        )
-
-        save_folder_obs = os.path.join(save_folder_observation, f'obs_frames')
-        os.makedirs(
-            save_folder_obs, exist_ok=True,
-        )
-
-        save_folder_direct = os.path.join(save_folder_planning, f'direct')
-        os.makedirs(
-            save_folder_direct, exist_ok=True,
-        )
-
-        save_folder_imagined = os.path.join(save_folder_planning, f'imagined')
-        os.makedirs(
-            save_folder_imagined, exist_ok=True,
-        )
-
         # DEBUG
-        save_folder_obs_semantics = os.path.join(save_folder_direct, f'obs_semantics')
+        save_folder_obs_semantics = os.path.join(save_folder_sample, f'obs_semantics')
         os.makedirs(
             save_folder_obs_semantics, exist_ok=True,
         )
         ## DEBUG
-
-        save_folder_height_map_direct = os.path.join(save_folder_direct, f'height_map')
-        os.makedirs(
-            save_folder_height_map_direct, exist_ok=True,
-        )
-
-        save_folder_height_map = os.path.join(save_folder_imagined, f'height_map')
-        os.makedirs(
-            save_folder_height_map, exist_ok=True,
-        )
-
-        save_folder_imagine = os.path.join(save_folder_imagined, f'imagined_frames')
-        os.makedirs(
-            save_folder_imagine, exist_ok=True,
-        )
-
-        save_folder_obs_map = os.path.join(save_folder_imagined, f'obs_map')
-        os.makedirs(
-            save_folder_obs_map, exist_ok=True,
-        )
 
         # get current observation
         observations = env_interface.get_observations()
@@ -346,7 +323,7 @@ def run_planner(cfg: DictConfig):
                 first_pose_habitat = habitat_obs["pose"]
 
             Image.fromarray(habitat_obs["rgb"]).save(
-                os.path.join(save_folder_obs, f"observed_{step}.png")
+                os.path.join(save_folder_obs, f"rendered_{step}.png")
             )
             
             belief_obs = BeliefAgent.convert_to_belief_obs(habitat_obs, first_pose_habitat)
@@ -391,10 +368,6 @@ def run_planner(cfg: DictConfig):
                         goal,
                         step_size=0.05,
                     )
-                # save height map with the path
-                belief_agent.obs_map.save_height_map(
-                    os.path.join(save_folder_height_map_direct, f"direct_plan_height_map_{step}.png"), path=path
-                )
             else: # Otherwise, continue exploring and imagining
                 goals = belief_agent.sample_next_exploration_goals(
                     belief_agent.obs_map, 

@@ -409,7 +409,6 @@ class OracleNavSkill(SkillPolicy):
             vel = compute_turn(rel_pos, self.turn_velocity, robot_forward)
             trans = vc.act(trans, vel)
             cur_pos = trans.translation
-
             if self.is_collision(trans):
                 return True
 
@@ -587,8 +586,8 @@ class OracleNavSkill(SkillPolicy):
             if need_move_backward:
                 vel[0] = -1 * vel[0]
 
-            # Reset the robot's leg joints
-            self.fix_robot_leg()
+            # # Reset the robot's leg joints
+            # self.fix_robot_leg()
 
             # Populate the actions tensor
             action[cur_batch_idx, self.linear_velocity_index] = vel[0]
