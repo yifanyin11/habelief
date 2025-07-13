@@ -18,6 +18,5 @@ nvidia-smi
 
 python /scratch/tshu2/yyin34/projects/3d_belief/partnr-planner/habitat_llm/examples/belief_agent_object_searching.py
 
-
 conda deactivate
 

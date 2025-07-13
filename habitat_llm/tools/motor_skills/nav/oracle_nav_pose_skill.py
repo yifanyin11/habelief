@@ -43,6 +43,7 @@ class OracleNavPoseSkill(SkillPolicy):
         # pre-computed target pose for the ArticulatedAgent. See set_target.
         self.target_base_pos: mn.Vector3 = None
         self.target_base_rot: float = None
+        self.facing_direction: float = None  # New variable to store facing direction
         self._has_reached_goal = torch.zeros(self._batch_size)
 
         # Define the velocity controller
@@ -95,6 +96,7 @@ class OracleNavPoseSkill(SkillPolicy):
         self.target_is_set = False
         self.target_base_pos = None
         self.target_base_rot = None
+        self.facing_direction = None  # Reset facing direction
         return
 
     def get_state_description(self):
@@ -157,13 +159,21 @@ class OracleNavPoseSkill(SkillPolicy):
         """
         Set the target position and calculate the optimal robot base position and rotation using embodied_unoccluded_navmesh_snap.
 
-        :param target_position: The target position (array-like, will be converted to mn.Vector3).
+        :param target_position: The target position (array-like, will be converted to mn.Vector3), 
+                               face_to_obj flag, teleport flag, and optional facing direction.
         """
         # Early return if the target is already set
         if self.target_is_set:
             return
         
-        target_position, face_to_obj, teleport = target_position
+        # Unpack parameters, now with an optional facing_direction parameter
+        if len(target_position) == 4:
+            target_position, face_to_obj, teleport, facing_direction = target_position
+            self.facing_direction = facing_direction  # Store the facing direction
+        else:
+            target_position, face_to_obj, teleport = target_position
+            self.facing_direction = None
+            
         self.face_to_obj = face_to_obj
         self.do_teleport = teleport
 
@@ -230,7 +240,6 @@ class OracleNavPoseSkill(SkillPolicy):
                 agent_embodiment=self.articulated_agent,
                 orientation_noise=0.0,  # allow a bit of variation in body orientation
             )
-
             if success:
                 pose_to_nav_point_dist = (
                     mn.Vector3(self.target_base_pos) - mn.Vector3(self.target_pos)
@@ -313,7 +322,12 @@ class OracleNavPoseSkill(SkillPolicy):
             action[cur_batch_idx, self.target_pos_range[1:4]] = torch.tensor(
                 self.target_base_pos, dtype=torch.float32
             ).to(action.device)
-            action[cur_batch_idx, self.target_pos_range[4]] = self.target_base_rot
+            
+            # Use facing_direction if provided, otherwise use target_base_rot
+            if self.facing_direction is not None:
+                action[cur_batch_idx, self.target_pos_range[4]] = self.facing_direction
+            else:
+                action[cur_batch_idx, self.target_pos_range[4]] = self.target_base_rot
 
             # teleported agent has reached the goal
             self._has_reached_goal[cur_batch_idx] = 1

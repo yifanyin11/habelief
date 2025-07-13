@@ -19,6 +19,7 @@ sys.path.append("..")
 from typing import Any, Dict
 from omegaconf import DictConfig, OmegaConf
 from hydra import initialize_config_dir, compose
+from habitat.tasks.utils import get_angle
 
 from habitat_llm.utils import cprint, setup_config
 
@@ -37,22 +38,26 @@ from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 
 def parse_episode_string(episode_string: str) -> Dict[str, Any]:
     """
-    Parse the episode string to extract relevant information.
+    Parse the episode string to extract:
+      - episode_name: 'epidx_<id>_scene_<scene_number>'
+      - scene_number: '<digits>' or '<digits>_<digits>'
+      - room_name: '<word_word_...>_<digit>'
     """
-    pattern = r"(epidx_\d+_scene_([^_]+(?:_[^_]+)*))_([a-zA-Z]+_\d+)"
-    match = re.match(pattern, episode_string)
+    pattern = re.compile(
+        r'^'                                 # start of string
+        r'(epidx_\d+_scene_(\d+(?:_\d+)*))'  # 1=episode_name, 2=scene_number
+        r'_'
+        r'(([A-Za-z]+(?:_[A-Za-z]+)*)_\d+)'  # 3=room_name (allows multiple words)
+    )
+    m = pattern.match(episode_string)
+    if not m:
+        raise ValueError(f"Invalid episode string format: {episode_string!r}")
 
-    if match:
-        episode_name = match.group(1)  # Full episode string
-        scene_number = match.group(2)  # Scene number
-        room_name = match.group(3) # Room name
-    else:
-        raise ValueError(f"Invalid episode string format: {episode_string}")
     return {
         "episode_string": episode_string,
-        "episode_name": episode_name,
-        "scene_number": scene_number,
-        "room_name": room_name
+        "episode_name": m.group(1),
+        "scene_number": m.group(2),
+        "room_name":   m.group(3),
     }
 
 def find_depth_value(points_3d, intrinsics, extrinsics):
@@ -136,6 +141,7 @@ class ObjectSearchingTaskManager:
         self.dataset_root = config.dataset_root
         self.habelief_episode_root = config.habelief_episode_root
         self.close_enough_distance = config.close_enough_distance
+        self.face_to_angle_threshold = config.face_to_angle_threshold
         self.agent_id = config.agent_id
         self.episodes = [parse_episode_string(episode_string) for episode_string in os.listdir(self.dataset_root)]
         self.env_interface = env_interface
@@ -150,15 +156,21 @@ class ObjectSearchingTaskManager:
         self.scene_number = None
         self.all_bboxes = None
 
-    def reset(self):
+    def reset(self, idx=None):
         # Extract the next episode
-        self.current_episode_index += 1
+        if idx is not None:
+            if idx < 0 or idx >= len(self.episodes):
+                raise IndexError(f"Index {idx} is out of bounds for episodes list.")
+            self.current_episode_index = idx
+        else:
+            self.current_episode_index += 1
         if self.current_episode_index >= len(self.episodes):
             cprint("No more episodes to process.", "red")
             return
         # Extract agent starting pose and target object
         episode_info = self.episodes[self.current_episode_index]
         self.episode_string = episode_info["episode_string"]
+        print(f"Resetting to episode: {self.episode_string}")
         self.episode_name = episode_info["episode_name"]
         self.scene_number = episode_info["scene_number"]
         room_name = episode_info["room_name"]
@@ -166,7 +178,7 @@ class ObjectSearchingTaskManager:
         pose_path = os.path.join(self.dataset_root, self.episode_string, "video", "pose")
         start_pose_file = sorted(os.listdir(pose_path))[0]
         start_pose_path = os.path.join(pose_path, start_pose_file)
-        start_pose = np.load(start_pose_path, allow_pickle=True).item()
+        start_pose = np.load(start_pose_path, allow_pickle=True)
         target_obj_path = os.path.join(self.dataset_root, self.episode_string, "entity_desc.txt")
         # First line is the target object, second line is the target object id
         with open(target_obj_path, "r") as file:
@@ -176,15 +188,15 @@ class ObjectSearchingTaskManager:
             self.target_obj = lines[0].strip()
             self.target_obj_name = lines[1].strip()
         # Extract intrinsics, all_bbox, all_obj_id 
-        intrinsics = np.load(os.path.join(self.habelief_episode_root, "agent_1", "intrinsics.npy"), allow_pickle=True)[0]
+        intrinsics = np.load(os.path.join(self.habelief_episode_root, self.episode_name, "agent_1", "intrinsics.npy"), allow_pickle=True)[0]
         self.intrinsics = get_instrinsic_matrix(intrinsics)
 
-        self.all_bboxes = np.load(os.path.join(self.habelief_episode_root, "agent_1", "all_bb.npy"), allow_pickle=True).item()
-        object_id_to_handle = np.load(os.path.join(self.habelief_episode_root, "agent_1", "object_id_to_handle.npy"), allow_pickle=True).item()
+        self.all_bboxes = np.load(os.path.join(self.habelief_episode_root, self.episode_name, "agent_1", "all_bb.npy"), allow_pickle=True).item()
+        object_id_to_handle = np.load(os.path.join(self.habelief_episode_root, self.episode_name, "agent_1", "object_id_to_handle.npy"), allow_pickle=True).item()
         object_handle_to_id = {v: k for k, v in object_id_to_handle.items()}
-        ao_id_to_handle = np.load(os.path.join(self.habelief_episode_root, "agent_1", "ao_id_to_handle.npy"), allow_pickle=True).item()
+        ao_id_to_handle = np.load(os.path.join(self.habelief_episode_root, self.episode_name, "agent_1", "ao_id_to_handle.npy"), allow_pickle=True).item()
         ao_handle_to_id = {v: k for k, v in ao_id_to_handle.items()}
-        world_graph = np.load(os.path.join(self.habelief_episode_root, "agent_1", room_name, "world_graph.npy"), allow_pickle=True).item()
+        world_graph = np.load(os.path.join(self.habelief_episode_root, self.episode_name, "agent_1", room_name, "world_graph.npy"), allow_pickle=True).item()
         all_furns = world_graph.get_all_furnitures()
 
         ao_furns = [furn for furn in all_furns if furn.sim_handle in ao_handle_to_id]
@@ -221,7 +233,7 @@ class ObjectSearchingTaskManager:
         # Set agent to the starting position
         hl_action_name = "NavigatePose"
         hl_action_input = (start_pose[:3, 3], False, True) # teleport to the starting pose
-
+        hl_action_done = False
         while not hl_action_done:
             low_level_action, response = self.eval_runner.planner.agents[
                 self.agent_id
@@ -241,45 +253,58 @@ class ObjectSearchingTaskManager:
 
         if not response:
             raise RuntimeError("Failed to reset the environment to the starting pose.")
-
-    def is_done(self, obs) -> bool:
-        # Get depth and extrinsics
-        depth = obs["head_depth"]
-        extrinsics = np.linalg.inv(
-                        self.env_interface.sim.agents[0]
-                        ._sensors["head_rgb"]
-                        .render_camera.camera_matrix
-                    )
-        # Check if the target object is in view
-        in_view = False
-        if self.target_obj_id is not None and self.all_bboxes is not None:
-            if is_obj_in_view(
-                self.target_obj_id,
-                depth,
-                self.intrinsics,
-                extrinsics,
-                self.all_bboxes
-            ):
-                in_view = True
-            else:
-                in_view = False
-        else:
-            raise ValueError("Target object ID or bounding boxes are not set.")
         
+        R = start_pose[:3, :3]
+        t = start_pose[:3, 3]
+        z_forward = R[:, 2]
+        t_new = t + 0.1 * z_forward
+        new_pose = deepcopy(start_pose)
+        new_pose[:3, 3] = t_new
+
+        hl_action_name = "NavigatePose"
+        hl_action_input = (new_pose[:3, 3], False, False)
+        hl_action_done = False
+        while not hl_action_done:
+            low_level_action, response = self.eval_runner.planner.agents[
+                self.agent_id
+            ].process_high_level_action(
+                hl_action_name, hl_action_input, observations
+            )
+            low_level_action = {self.agent_id: low_level_action}
+
+            obs, _, _, _ = self.env_interface.step(
+                low_level_action
+            )
+            observations = self.env_interface.parse_observations(obs)
+            
+            if response:
+                print(f"\tResponse: {response}")
+                hl_action_done = True
+
+        if not response:
+            raise RuntimeError("Failed to reset the environment to the starting pose.")
+        
+        return obs
+
+    def is_done(self) -> bool:
+        # Get the agent's position
+        base_T = self.env_interface.sim.agents_mgr[self.agent_id].articulated_agent.base_transformation
+        agent_position = np.array(base_T[3])[:3]
+        # Get the position of the target object
+        target_obj_T = self.all_bboxes[self.target_obj_id][1]
+        target_obj_position = np.array(target_obj_T[3])[:3]
+        distance = np.linalg.norm((target_obj_position - agent_position)[[0, 2]])
         # Check if the target object is close enough
         close_enough = False
-        # Get the position of the target object
-        target_obj_bbox = self.all_bboxes[self.target_obj_id][0]
-        target_obj_position = np.array([
-            (target_obj_bbox.front_bottom_left.x + target_obj_bbox.back_bottom_right.x) / 2,
-            (target_obj_bbox.front_bottom_left.y + target_obj_bbox.back_bottom_right.y) / 2,
-            (target_obj_bbox.front_bottom_left.z + target_obj_bbox.back_bottom_right.z) / 2
-        ])
-        # Get the agent's position
-        agent_position = extrinsics[:3, 3]
-        distance = np.linalg.norm(target_obj_position - agent_position)
         if distance < self.close_enough_distance:
             cprint(f"Target object {self.target_obj_name} is in view and close enough.", "green")
             close_enough = True
         
-        return in_view and close_enough
+        # Check if the agent is looking at the target object
+        forward = np.array([1.0, 0, 0])
+        robot_forward = np.array(base_T.transform_vector(forward))[[0, 2]]
+        rel_direction = target_obj_position - agent_position
+        rel_direction = rel_direction[[0, 2]]
+        angle = get_angle(robot_forward, rel_direction)
+        face_to = abs(angle) < self.face_to_angle_threshold
+        return close_enough

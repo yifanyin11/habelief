@@ -47,6 +47,7 @@ from habitat_llm.evaluation import (
 from habitat_llm.world_model import Room
 from habitat_llm.utils.core import get_config
 from habitat_llm.agent.env.dataset import CollaborationDatasetV0
+from habitat_llm.examples.object_searching_task_manager import ObjectSearchingTaskManager
 
 from agents.perception import object_detection
 from pixelbelief.belief_agent import BeliefAgent, prepare_video
@@ -217,6 +218,17 @@ def run_planner(cfg: DictConfig):
     # Instantiate the agent planner
     eval_runner = CentralizedEvaluationRunner(config.evaluation, env_interface)
 
+    # Initialize the task manager
+    manager_config = get_config(
+        "examples/object_searching.yaml",
+    )
+    task_manager = ObjectSearchingTaskManager(
+        env_interface=env_interface,
+        eval_runner=eval_runner,
+        dataset=dataset,
+        config=manager_config,
+    )
+
     # Highlight the mode of operation
     cprint("\n---------------------------------------", "blue")
     cprint(f"Planner Mode: {config.evaluation.type.capitalize()}", "blue")
@@ -226,26 +238,23 @@ def run_planner(cfg: DictConfig):
     if env_interface._single_agent_mode:
         cprint("Single agent mode", "green")
     cprint("---------------------------------------\n", "blue")
-    num_episodes = len(env_interface.env.episodes)
-    processed_scenes = {}
-    robot_agent_uid = config.robot_agent_uid
-    room_type = "dining_room"
+    num_episodes = len(task_manager.episodes)
+    robot_agent_uid = manager_config.agent_id
+    max_steps = manager_config.max_steps
 
     # initial reset to load first episode
     for idx in range(num_episodes):
-        env_interface.reset_environment()
-        eval_runner.reset()
-        cur_episode = env_interface.env.env.env._env.current_episode
-        cur_episode.episode_id = idx
-        scene_id = cur_episode.scene_id
-        target_obj = "bed" # target object to search for
+        obs = task_manager.reset()
 
-        print(
-            f"Processing scene: {scene_id}, episode: {idx+1}/{num_episodes}, processed scenes: {len(processed_scenes)}"
-        )
-        
+        target_obj = task_manager.target_obj
+        # DEBUG
+        print(f"Target object: {target_obj}")
+        ## DEBUG
+
+        assert isinstance(target_obj, str), "Target object should be a string"
+
         # create save folders
-        save_folder_sample = os.path.join(run_dir, f"visuals_{idx}")
+        save_folder_sample = os.path.join(run_dir, f"{task_manager.scene_number}_{target_obj}_{idx}")
         os.makedirs(
             save_folder_sample, exist_ok=True,
         )
@@ -270,6 +279,13 @@ def run_planner(cfg: DictConfig):
             save_folder_obs, exist_ok=True,
         )
 
+        # DEBUG
+        save_folder_obs_semantics = os.path.join(save_folder_observation, f'obs_semantics')
+        os.makedirs(
+            save_folder_obs_semantics, exist_ok=True,
+        )
+        ## DEBUG
+
         save_folder_direct = os.path.join(save_folder_planning, f'direct')
         os.makedirs(
             save_folder_direct, exist_ok=True,
@@ -279,13 +295,6 @@ def run_planner(cfg: DictConfig):
         os.makedirs(
             save_folder_imagined, exist_ok=True,
         )
-
-        # DEBUG
-        save_folder_obs_semantics = os.path.join(save_folder_direct, f'obs_semantics')
-        os.makedirs(
-            save_folder_obs_semantics, exist_ok=True,
-        )
-        ## DEBUG
 
         save_folder_height_map_direct = os.path.join(save_folder_direct, f'height_map')
         os.makedirs(
@@ -309,36 +318,12 @@ def run_planner(cfg: DictConfig):
 
         # get current observation
         observations = env_interface.get_observations()
-
-        # get the list of all rooms in this house
-        rooms = env_interface.world_graph[robot_agent_uid].get_all_nodes_of_type(Room)
-        for current_room in rooms:
-            if room_type in current_room.name:
-                break
-        
-        hl_action_name = "Explore"
-        hl_action_input = current_room.name
-        hl_action_done = False
-        print(f"Navigating to {hl_action_input}") # TODO teleport to a given pose
-
-        while not hl_action_done:
-            env_interface.reset_world_graph()
-            low_level_action, response = eval_runner.planner.agents[
-                0
-            ].process_high_level_action(
-                hl_action_name, hl_action_input, observations
-            )
-            low_level_action = {0: low_level_action}
-
-            obs, _, _, _ = env_interface.step(
-                low_level_action, room_name=current_room.name
-            )
-            observations = env_interface.parse_observations(obs)
-            break
+        all_frames = []
         
         first_pose_habitat = None
         step = 0
-        for step in range(5): # TODO Set a max number of steps to explore
+        done = False
+        while step < max_steps and not done:
             # Extract current obs
             habitat_obs = extract_obs(env_interface, obs)
 
@@ -354,7 +339,7 @@ def run_planner(cfg: DictConfig):
             # observe with the current observation
             belief_agent.observe([belief_obs["rgb"]], [belief_obs["pose"]])
             # render at the current pose
-            _, depth, semantic = belief_agent.render_image(extrinsics=belief_obs["pose"], query_label=target_obj)
+            rgb, depth, semantic = belief_agent.render_image(extrinsics=belief_obs["pose"], query_label=target_obj)
             # find object center at the max semantic value
             semantic = semantic[0]
             # DEBUG save semantic map
@@ -364,13 +349,23 @@ def run_planner(cfg: DictConfig):
                 os.path.join(save_folder_obs_semantics, f"semantic_{step}.png")
             )
 
-            max_semantic_score = np.max(semantic)
+            # use detection model
+            boxes = object_detection(image_path=os.path.join(save_folder_obs, f"observed_{step}.png"), text_prompt=target_obj, annotation=True)
+            if len(boxes)>0:
+                h, w, _ = rgb[0].shape
+                boxes = boxes * torch.tensor([w, h, w, h])
+                obj_center = (boxes[..., :2] + boxes[..., 2:]) * 0.5
+                if obj_center.shape[0]>1:
+                    obj_center = obj_center[0:1]
+                obj_center = obj_center.squeeze(0).tolist()
+                obj_center = tuple(int(x) for x in obj_center)
+            else:
+                obj_center = None
 
             # If new observation contains the target object, set goal to that point
-            if max_semantic_score > semantic_thred:
-                obj_center = np.unravel_index(np.argmax(semantic), semantic.shape)
-                print(f"Object center: {obj_center}, max semantic score: {max_semantic_score}")
-                depth_val = depth[0][obj_center[0], obj_center[1]] - 0.5 # offset
+            if obj_center is not None:
+                print(f"Object center: {obj_center}")
+                depth_val = depth[0][obj_center[0], obj_center[1]] - 0.3 # offset
                 # build the homogeneous pixel
                 pix_h = np.array([obj_center[0], obj_center[1], 1.0], dtype=float)
                 # unproject to camera frame
@@ -464,7 +459,7 @@ def run_planner(cfg: DictConfig):
                         object_center = np.unravel_index(
                             np.argmax(semantics[max_idx][0]), semantics[max_idx][0].shape
                         )
-                        depth_val = depths[max_idx][0][object_center[0], object_center[1]] - 0.5 # offset
+                        depth_val = depths[max_idx][0][object_center[0], object_center[1]] - 0.3 # offset
                         # build the homogeneous pixel
                         pix_h = np.array([object_center[0], object_center[1], 1.0], dtype=float)
                         # unproject to camera frame
@@ -517,7 +512,7 @@ def run_planner(cfg: DictConfig):
                 path_distance = np.linalg.norm(
                     np.array(path[-1]) - np.array(path[0])
                 )
-                if path_distance < 0.5:
+                if path_distance < 1.5:
                     face_to_object = True
                 else:
                     face_to_object = False
@@ -539,14 +534,14 @@ def run_planner(cfg: DictConfig):
 
             while not hl_action_done:
                 low_level_action, response = eval_runner.planner.agents[
-                    0
+                    robot_agent_uid
                 ].process_high_level_action(
                     hl_action_name, hl_action_input, observations
                 )
-                low_level_action = {0: low_level_action}
+                low_level_action = {robot_agent_uid: low_level_action}
 
                 obs, _, _, _ = env_interface.step(
-                    low_level_action, room_name=current_room.name
+                    low_level_action,
                 )
                 observations = env_interface.parse_observations(obs)
                 frames_concat = eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
@@ -556,8 +551,6 @@ def run_planner(cfg: DictConfig):
                 if response:
                     print(f"\tResponse: {response}")
                     hl_action_done = True
-                
-                # TODO: check if the agent has reached the target object
 
             trajectory.append(
                 {
@@ -572,9 +565,21 @@ def run_planner(cfg: DictConfig):
                 fps=10,
                 quality=10,
             )
+            # Append elements in debug_frames to all_frames
+            all_frames.extend(debug_frames)
             step+=1
 
-        break
+            if task_manager.is_done():
+                print(f"Episode {idx} completed.")
+                done = True
+        # save final nav video
+        video_path = os.path.join(save_folder_nav_video, f"full_nav_video.mp4")
+        imageio.mimwrite(
+            video_path,
+            all_frames,
+            fps=10,
+            quality=10,
+        )
 
     env_interface.sim.close()
 

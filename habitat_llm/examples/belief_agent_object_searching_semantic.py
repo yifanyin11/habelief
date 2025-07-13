@@ -32,8 +32,6 @@ sys.path.append("..")
 from typing import Any, Dict
 from omegaconf import DictConfig, OmegaConf
 from hydra import initialize_config_dir, compose
-from habitat.tasks.nav.shortest_path_follower import ShortestPathFollower  
-from habitat.sims.habitat_simulator.actions import HabitatSimActions
 
 from habitat_llm.utils import cprint, setup_config
 
@@ -49,6 +47,7 @@ from habitat_llm.evaluation import (
 from habitat_llm.world_model import Room
 from habitat_llm.utils.core import get_config
 from habitat_llm.agent.env.dataset import CollaborationDatasetV0
+from habitat_llm.examples.object_searching_task_manager import ObjectSearchingTaskManager
 
 from agents.perception import object_detection
 from pixelbelief.belief_agent import BeliefAgent, prepare_video
@@ -168,7 +167,7 @@ def run_planner(cfg: DictConfig):
         "habitat.dataset.scenes_dir=data/hssd-hab/",
     ]
     SENSOR_OVERRIDES = [
-        "habitat.simulator.agents.main_agent.sim_sensors.jaw_depth_sensor.normalize_depth=False"
+        "habitat.simulator.agents.main_agent.sim_sensors.jaw_depth_sensor.normalize_depth=False",
     ]
     LLM_OVERRIDES = [
         "llm@evaluation.planner.plan_config.llm=mock",
@@ -219,6 +218,17 @@ def run_planner(cfg: DictConfig):
     # Instantiate the agent planner
     eval_runner = CentralizedEvaluationRunner(config.evaluation, env_interface)
 
+    # Initialize the task manager
+    manager_config = get_config(
+        "examples/object_searching.yaml",
+    )
+    task_manager = ObjectSearchingTaskManager(
+        env_interface=env_interface,
+        eval_runner=eval_runner,
+        dataset=dataset,
+        config=manager_config,
+    )
+
     # Highlight the mode of operation
     cprint("\n---------------------------------------", "blue")
     cprint(f"Planner Mode: {config.evaluation.type.capitalize()}", "blue")
@@ -228,94 +238,92 @@ def run_planner(cfg: DictConfig):
     if env_interface._single_agent_mode:
         cprint("Single agent mode", "green")
     cprint("---------------------------------------\n", "blue")
-    num_episodes = len(env_interface.env.episodes)
-    processed_scenes = {}
-    robot_agent_uid = config.robot_agent_uid
-    room_type = "dining_room"
+    num_episodes = len(task_manager.episodes)
+    robot_agent_uid = manager_config.agent_id
+    max_steps = manager_config.max_steps
 
     # initial reset to load first episode
     for idx in range(num_episodes):
-        env_interface.reset_environment()
-        eval_runner.reset()
-        cur_episode = env_interface.env.env.env._env.current_episode
-        cur_episode.episode_id = idx
-        scene_id = cur_episode.scene_id
-        target_obj = "bed" # target object to search for
+        obs = task_manager.reset()
 
-        print(
-            f"Processing scene: {scene_id}, episode: {idx+1}/{num_episodes}, processed scenes: {len(processed_scenes)}"
-        )
-        
+        target_obj = task_manager.target_obj
+        # DEBUG
+        print(f"Target object: {target_obj}")
+        ## DEBUG
+
+        assert isinstance(target_obj, str), "Target object should be a string"
+
         # create save folders
-        save_folder_sample = os.path.join(run_dir, f"visuals_{idx}")
+        save_folder_sample = os.path.join(run_dir, f"{task_manager.scene_number}_{target_obj}_{idx}")
         os.makedirs(
             save_folder_sample, exist_ok=True,
         )
 
-        save_folder_obs = os.path.join(save_folder_sample, f'obs_frames')
-        os.makedirs(
-            save_folder_obs, exist_ok=True,
-        )
-
-        save_folder_obs_map = os.path.join(save_folder_sample, f'obs_map')
-        os.makedirs(
-            save_folder_obs_map, exist_ok=True,
-        )
-
-        save_folder_height_map = os.path.join(save_folder_sample, f'height_map')
-        os.makedirs(
-            save_folder_height_map, exist_ok=True,
-        )
-
-        save_folder_imagine = os.path.join(save_folder_sample, f'imagined_frames')
-        os.makedirs(
-            save_folder_imagine, exist_ok=True,
-        )
-        
         save_folder_nav_video = os.path.join(save_folder_sample, f'nav_video')
         os.makedirs(
             save_folder_nav_video, exist_ok=True,
         )
 
+        save_folder_observation = os.path.join(save_folder_sample, f'observation')
+        os.makedirs(
+            save_folder_observation, exist_ok=True,
+        )
+
+        save_folder_planning = os.path.join(save_folder_sample, f'planning')
+        os.makedirs(
+            save_folder_planning, exist_ok=True,
+        )
+
+        save_folder_obs = os.path.join(save_folder_observation, f'obs_frames')
+        os.makedirs(
+            save_folder_obs, exist_ok=True,
+        )
+
+        save_folder_direct = os.path.join(save_folder_planning, f'direct')
+        os.makedirs(
+            save_folder_direct, exist_ok=True,
+        )
+
+        save_folder_imagined = os.path.join(save_folder_planning, f'imagined')
+        os.makedirs(
+            save_folder_imagined, exist_ok=True,
+        )
+
         # DEBUG
-        save_folder_obs_semantics = os.path.join(save_folder_sample, f'obs_semantics')
+        save_folder_obs_semantics = os.path.join(save_folder_direct, f'obs_semantics')
         os.makedirs(
             save_folder_obs_semantics, exist_ok=True,
         )
         ## DEBUG
 
+        save_folder_height_map_direct = os.path.join(save_folder_direct, f'height_map')
+        os.makedirs(
+            save_folder_height_map_direct, exist_ok=True,
+        )
+
+        save_folder_height_map = os.path.join(save_folder_imagined, f'height_map')
+        os.makedirs(
+            save_folder_height_map, exist_ok=True,
+        )
+
+        save_folder_imagine = os.path.join(save_folder_imagined, f'imagined_frames')
+        os.makedirs(
+            save_folder_imagine, exist_ok=True,
+        )
+
+        save_folder_obs_map = os.path.join(save_folder_imagined, f'obs_map')
+        os.makedirs(
+            save_folder_obs_map, exist_ok=True,
+        )
+
         # get current observation
         observations = env_interface.get_observations()
-
-        # get the list of all rooms in this house
-        rooms = env_interface.world_graph[robot_agent_uid].get_all_nodes_of_type(Room)
-        for current_room in rooms:
-            if room_type in current_room.name:
-                break
-        
-        hl_action_name = "Explore"
-        hl_action_input = current_room.name
-        hl_action_done = False
-        print(f"Navigating to {hl_action_input}") # TODO teleport to a given pose
-
-        while not hl_action_done:
-            env_interface.reset_world_graph()
-            low_level_action, response = eval_runner.planner.agents[
-                0
-            ].process_high_level_action(
-                hl_action_name, hl_action_input, observations
-            )
-            low_level_action = {0: low_level_action}
-
-            obs, _, _, _ = env_interface.step(
-                low_level_action, room_name=current_room.name
-            )
-            observations = env_interface.parse_observations(obs)
-            break
+        all_frames = []
         
         first_pose_habitat = None
         step = 0
-        for step in range(5): # TODO Set a max number of steps to explore
+        done = False
+        while step < max_steps and not done:
             # Extract current obs
             habitat_obs = extract_obs(env_interface, obs)
 
@@ -323,7 +331,7 @@ def run_planner(cfg: DictConfig):
                 first_pose_habitat = habitat_obs["pose"]
 
             Image.fromarray(habitat_obs["rgb"]).save(
-                os.path.join(save_folder_obs, f"rendered_{step}.png")
+                os.path.join(save_folder_obs, f"observed_{step}.png")
             )
             
             belief_obs = BeliefAgent.convert_to_belief_obs(habitat_obs, first_pose_habitat)
@@ -368,6 +376,10 @@ def run_planner(cfg: DictConfig):
                         goal,
                         step_size=0.05,
                     )
+                # save height map with the path
+                belief_agent.obs_map.save_height_map(
+                    os.path.join(save_folder_height_map_direct, f"direct_plan_height_map_{step}.png"), path=path
+                )
             else: # Otherwise, continue exploring and imagining
                 goals = belief_agent.sample_next_exploration_goals(
                     belief_agent.obs_map, 
@@ -512,14 +524,14 @@ def run_planner(cfg: DictConfig):
 
             while not hl_action_done:
                 low_level_action, response = eval_runner.planner.agents[
-                    0
+                    robot_agent_uid
                 ].process_high_level_action(
                     hl_action_name, hl_action_input, observations
                 )
-                low_level_action = {0: low_level_action}
+                low_level_action = {robot_agent_uid: low_level_action}
 
                 obs, _, _, _ = env_interface.step(
-                    low_level_action, room_name=current_room.name
+                    low_level_action,
                 )
                 observations = env_interface.parse_observations(obs)
                 frames_concat = eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
@@ -529,8 +541,6 @@ def run_planner(cfg: DictConfig):
                 if response:
                     print(f"\tResponse: {response}")
                     hl_action_done = True
-                
-                # TODO: check if the agent has reached the target object
 
             trajectory.append(
                 {
@@ -545,9 +555,21 @@ def run_planner(cfg: DictConfig):
                 fps=10,
                 quality=10,
             )
+            # Append elements in debug_frames to all_frames
+            all_frames.extend(debug_frames)
             step+=1
 
-        break
+            if task_manager.is_done():
+                print(f"Episode {idx} completed.")
+                done = True
+        # save final nav video
+        video_path = os.path.join(save_folder_nav_video, f"full_nav_video.mp4")
+        imageio.mimwrite(
+            video_path,
+            all_frames,
+            fps=10,
+            quality=10,
+        )
 
     env_interface.sim.close()
 
@@ -585,7 +607,7 @@ if __name__ == "__main__":
                 "agent.save_scene=False",
             ]
         )
-    cfg.checkpoint_path = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/weights/semantic/model-14.pt"
+    cfg.checkpoint_path = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/weights/semantic/model-51.pt"
     cfg.results_folder = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/belief_agent"
     cfg.semantic_config = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/configurations/semantic/onehot.yaml"
 
