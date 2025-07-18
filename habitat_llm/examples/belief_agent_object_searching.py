@@ -244,7 +244,7 @@ def run_planner(cfg: DictConfig):
 
     # initial reset to load first episode
     for idx in range(num_episodes):
-        obs = task_manager.reset()
+        obs = task_manager.reset(1)
 
         target_obj = task_manager.target_obj
         # DEBUG
@@ -285,6 +285,16 @@ def run_planner(cfg: DictConfig):
             save_folder_obs_semantics, exist_ok=True,
         )
         ## DEBUG
+
+        save_folder_obs_obs_map = os.path.join(save_folder_observation, f'obs_maps')
+        os.makedirs(
+            save_folder_obs_obs_map, exist_ok=True,
+        )
+
+        save_folder_obs_height_map = os.path.join(save_folder_observation, f'height_maps')
+        os.makedirs(
+            save_folder_obs_height_map, exist_ok=True,
+        )
 
         save_folder_direct = os.path.join(save_folder_planning, f'direct')
         os.makedirs(
@@ -338,6 +348,14 @@ def run_planner(cfg: DictConfig):
             
             # observe with the current observation
             belief_agent.observe([belief_obs["rgb"]], [belief_obs["pose"]])
+            # save obs map
+            belief_agent.obs_map.save_occupancy_map(
+                os.path.join(save_folder_obs_obs_map, f"obs_map_{step}.png"),
+            )
+            # save height map
+            belief_agent.obs_map.save_height_map(
+                os.path.join(save_folder_obs_height_map, f"height_map_{step}.png"),
+            )
             # render at the current pose
             rgb, depth, semantic = belief_agent.render_image(extrinsics=belief_obs["pose"], query_label=target_obj)
             # find object center at the max semantic value
@@ -594,11 +612,12 @@ if __name__ == "__main__":
         cfg = compose(
             config_name="sp_reason.yaml",
             overrides=[
-                "sampling_steps=20",
+                "sampling_steps=50",
                 "semantic_mode=embed",
                 "semantic_viz=query",
                 "adjacent_angle=0.523",
                 "adjacent_distance=1.0",
+                "clean_target=False",
                 "model.encoder.use_epipolar_transformer=False",
                 "model.encoder.use_image_condition=True",
                 "model.encoder.depth_predictor_time_embed=True",
@@ -608,7 +627,7 @@ if __name__ == "__main__":
                 "model.encoder.use_reg_model=True",
                 "model.encoder.d_semantic=512",
                 "model.encoder.d_semantic_reg=384",
-                "model.encoder.gaussians_per_pixel=1",
+                "model.encoder.gaussians_per_pixel=3",
                 "model.encoder.inference_mode=True",
                 "model.encoder.backbone.view_attn_n_layers=4",
                 "model.encoder.backbone.use_diff_pos_embed=True",
@@ -617,7 +636,7 @@ if __name__ == "__main__":
                 "agent.save_scene=False",
             ]
         )
-    cfg.checkpoint_path = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/weights/semantic/model-14.pt"
+    cfg.checkpoint_path = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/weights/semantic/semantic_from_plain_low_lr_semantic_loss_weight/model-7.pt"
     cfg.results_folder = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/belief_agent"
     cfg.semantic_config = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/configurations/semantic/onehot.yaml"
 
