@@ -16,7 +16,9 @@ conda activate dfm-pixel-habitat
 
 nvidia-smi
 
-python /scratch/tshu2/yyin34/projects/3d_belief/partnr-planner/habitat_llm/examples/belief_agent_object_searching.py
+# python /scratch/tshu2/yyin34/projects/3d_belief/partnr-planner/habitat_llm/examples/object_searching/seq/belief_agent_object_searching.py
+
+python /scratch/tshu2/yyin34/projects/3d_belief/partnr-planner/habitat_llm/examples/object_searching/dfm/belief_agent_object_searching_vlm.py
 
 conda deactivate
 

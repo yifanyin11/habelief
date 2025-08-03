@@ -154,7 +154,9 @@ class ObjectSearchingTaskManager:
         self.episode_string = None
         self.episode_name = None
         self.scene_number = None
+        self.room_name = None
         self.all_bboxes = None
+        self.last_position = None
 
     def reset(self, idx=None):
         # Extract the next episode
@@ -174,6 +176,7 @@ class ObjectSearchingTaskManager:
         self.episode_name = episode_info["episode_name"]
         self.scene_number = episode_info["scene_number"]
         room_name = episode_info["room_name"]
+        self.room_name = room_name
 
         pose_path = os.path.join(self.dataset_root, self.episode_string, "video", "pose")
         start_pose_file = sorted(os.listdir(pose_path))[0]
@@ -284,6 +287,9 @@ class ObjectSearchingTaskManager:
         if not response:
             raise RuntimeError("Failed to reset the environment to the starting pose.")
         
+        # Update the last position
+        self.last_position = new_pose[:3, 3].copy()
+        
         return obs
 
     def is_done(self) -> bool:
@@ -307,4 +313,30 @@ class ObjectSearchingTaskManager:
         rel_direction = rel_direction[[0, 2]]
         angle = get_angle(robot_forward, rel_direction)
         face_to = abs(angle) < self.face_to_angle_threshold
+
+        # if the agent is move outside the room, reset the agent to the last position
+        world_graph = self.env_interface.full_world_graph
+        if world_graph.get_room_for_entity(world_graph.get_spot_robot()).name != self.room_name:
+            cprint(f"Agent is outside the room {self.room_name}, resetting to the last position.", "red")
+            hl_action_name = "NavigatePose"
+            hl_action_input = (self.last_position, False, False)
+            hl_action_done = False
+            while not hl_action_done:
+                low_level_action, response = self.eval_runner.planner.agents[
+                    self.agent_id
+                ].process_high_level_action(
+                    hl_action_name, hl_action_input, self.env_interface.get_observations()
+                )
+                low_level_action = {self.agent_id: low_level_action}
+
+                obs, _, _, _ = self.env_interface.step(
+                    low_level_action
+                )
+                if response:
+                    print(f"\tResponse: {response}")
+                    hl_action_done = True
+        
+        # if the agent is too near a wall, reset the agent to the last position
+        # check the depth value of the center of the depth map, if it is too small, reset the agent
+        depth = self.env_interface.get_observations()["depth"]
         return close_enough

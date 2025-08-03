@@ -6,4 +6,4 @@ habelief_episode_root: /scratch/tshu2/yyin34/projects/3d_belief/partnr-planner/d
 close_enough_distance: 1.2
 face_to_angle_threshold: 0.785  # 45 degrees in radians
 agent_id: 0
-max_steps: 100
+max_steps: 10
