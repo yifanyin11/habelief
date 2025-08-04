@@ -135,6 +135,35 @@ def is_obj_in_view(obj_id, depth, intrinsics, extrinsics, all_bboxes):
     # Check if valid points meet the threshold
     return valid_points >= thred
 
+def extract_obs(env_interface: EnvironmentInterface, obs: Dict[str, Any]):
+
+    curr_agent, camera_source = env_interface.trajectory_agent_names[0], env_interface.conf.trajectory.camera_prefixes[0]
+
+    if env_interface._single_agent_mode:
+        rgb = obs[f"{camera_source}_rgb"]
+        depth = obs[f"{camera_source}_depth"]
+        pose = np.linalg.inv(
+            env_interface.sim.agents[0]
+            ._sensors[f"{camera_source}_rgb"]
+            .render_camera.camera_matrix
+        )
+    else:
+        rgb = obs[f"{curr_agent}_{camera_source}_rgb"]
+        depth = obs[f"{curr_agent}_{camera_source}_depth"]
+        pose = np.linalg.inv(
+            env_interface.sim.agents[0]
+            ._sensors[f"{curr_agent}_{camera_source}_rgb"]
+            .render_camera.camera_matrix
+        )
+    
+    extracted_obs = {
+        "rgb": rgb,
+        "depth": depth,
+        "pose": pose
+    }
+
+    return extracted_obs
+
 class ObjectSearchingTaskManager:
     def __init__(self, config: DictConfig, env_interface: EnvironmentInterface, dataset: CollaborationDatasetV0, eval_runner: CentralizedEvaluationRunner):
         self.config = config
@@ -314,6 +343,7 @@ class ObjectSearchingTaskManager:
         angle = get_angle(robot_forward, rel_direction)
         face_to = abs(angle) < self.face_to_angle_threshold
 
+        extra_frames = []
         # if the agent is move outside the room, reset the agent to the last position
         world_graph = self.env_interface.full_world_graph
         if world_graph.get_room_for_entity(world_graph.get_spot_robot()).name != self.room_name:
@@ -332,11 +362,44 @@ class ObjectSearchingTaskManager:
                 obs, _, _, _ = self.env_interface.step(
                     low_level_action
                 )
+                observations = self.env_interface.parse_observations(obs)
+                frames_concat = self.eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
+                frames_concat = np.ascontiguousarray(frames_concat)
+                extra_frames.append(frames_concat)
                 if response:
                     print(f"\tResponse: {response}")
                     hl_action_done = True
         
         # if the agent is too near a wall, reset the agent to the last position
         # check the depth value of the center of the depth map, if it is too small, reset the agent
-        depth = self.env_interface.get_observations()["depth"]
-        return close_enough
+        # or if the depth map is too uniform (max and min are too close), reset the agent
+        depth = extract_obs(self.env_interface, self.env_interface.get_observations())["depth"][0, ..., 0]
+        center_depth = depth[depth.shape[0] // 2, depth.shape[1] // 2]
+        depth_range = (depth.max() - depth.min()).item()  # .item() to get a Python float
+        center_depth_val = center_depth.item() if torch.is_tensor(center_depth) else center_depth
+
+        if depth_range < 0.1 or center_depth_val < 0.5:  # threshold for being too near a wall
+            cprint(f"Agent is too near a wall, resetting to the last position.", "red")
+            hl_action_name = "NavigatePose"
+            hl_action_input = (self.last_position, False, False)
+            hl_action_done = False
+            while not hl_action_done:
+                low_level_action, response = self.eval_runner.planner.agents[
+                    self.agent_id
+                ].process_high_level_action(
+                    hl_action_name, hl_action_input, self.env_interface.get_observations()
+                )
+                low_level_action = {self.agent_id: low_level_action}
+
+                obs, _, _, _ = self.env_interface.step(
+                    low_level_action
+                )
+                observations = self.env_interface.parse_observations(obs)
+                frames_concat = self.eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
+                frames_concat = np.ascontiguousarray(frames_concat)
+                extra_frames.append(frames_concat)
+                if response:
+                    print(f"\tResponse: {response}")
+                    hl_action_done = True
+        print(f"Pass is_done check")
+        return close_enough, extra_frames

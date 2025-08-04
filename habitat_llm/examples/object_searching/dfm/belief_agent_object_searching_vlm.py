@@ -24,6 +24,7 @@ from copy import deepcopy
 from pathlib import Path
 import math
 import json
+import time
 
 ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)
 sys.path.append(ROOT_DIR)
@@ -245,7 +246,7 @@ def run_planner(cfg: DictConfig):
 
     # initial reset to load first episode
     for idx in range(num_episodes):
-        obs = task_manager.reset(0)
+        obs = task_manager.reset()
 
         target_obj = task_manager.target_obj
         # DEBUG
@@ -334,7 +335,10 @@ def run_planner(cfg: DictConfig):
         first_pose_habitat = None
         step = 0
         done = False
+        start_time = time.time()
         while step < max_steps and not done:
+            # step start time
+            step_start_time = time.time()
             # Extract current obs
             habitat_obs = extract_obs(env_interface, obs)
 
@@ -372,6 +376,7 @@ def run_planner(cfg: DictConfig):
                     "step": idx,
                     "is_direct": success,
                     "target_obj": target_obj,
+                    "step_time": time.time() - step_start_time,
                 }
                 # dump the step log
                 with open(os.path.join(save_folder_sample, f"step_log_{step}.json"), "w") as f:
@@ -501,8 +506,6 @@ def run_planner(cfg: DictConfig):
             path_habitat_exe = path_habitat[:len(path_habitat)//4+1] # TODO find a subset of the path with step size
 
             # Navigate following a subset of the path
-            trajectory = []
-
             hl_action_name = "NavigatePose"
 
             debug_frames = []
@@ -532,6 +535,9 @@ def run_planner(cfg: DictConfig):
                     print(f"\tResponse: {response}")
                     hl_action_done = True
 
+            # step end time
+            step_end_time = time.time()
+
             # save video
             video_path = os.path.join(save_folder_nav_video, f"nav_video_{step}.mp4")
             imageio.mimwrite(
@@ -542,9 +548,10 @@ def run_planner(cfg: DictConfig):
             )
             # append elements in debug_frames to all_frames
             all_frames.extend(debug_frames)
-            step+=1
 
-            if task_manager.is_done():
+            is_done, extra_frames = task_manager.is_done()
+            all_frames.extend(extra_frames)
+            if is_done:
                 print(f"Episode {idx} completed.")
                 done = True
 
@@ -554,6 +561,7 @@ def run_planner(cfg: DictConfig):
                 "is_direct": False,
                 "target_obj": target_obj,
                 "semantic_thred": semantic_thred,
+                "step_time": step_end_time - step_start_time,
             }
 
             step_log["imagined_goal"] = {
@@ -565,7 +573,10 @@ def run_planner(cfg: DictConfig):
             # dump the step log
             with open(os.path.join(save_folder_sample, f"step_log_{step}.json"), "w") as f:
                 json.dump(step_log, f, indent=4)
-
+            
+            # increment step
+            step+=1
+    
         # save final nav video
         video_path = os.path.join(save_folder_nav_video, f"full_nav_video.mp4")
         imageio.mimwrite(
@@ -574,6 +585,18 @@ def run_planner(cfg: DictConfig):
             fps=10,
             quality=10,
         )
+        
+        # setup final log
+        final_log = {
+            "scene": task_manager.scene_number,
+            "target_obj": target_obj,
+            "num_steps": step,
+            "success": done,
+            "time_taken": time.time() - start_time,
+        }
+        # dump final log
+        with open(os.path.join(save_folder_sample, f"final_log.json"), "w") as f:
+            json.dump(final_log, f, indent=4)
 
     env_interface.sim.close()
 
@@ -588,10 +611,10 @@ if __name__ == "__main__":
         cfg = compose(
             config_name="sp_reason.yaml",
             overrides=[
-                "sampling_steps=50",
+                "sampling_steps=10",
                 "semantic_mode=embed",
                 "semantic_viz=query",
-                "adjacent_angle=0.523",
+                "adjacent_angle=0.785",
                 "adjacent_distance=1.0",
                 "clean_target=False",
                 "model.encoder.use_epipolar_transformer=False",
@@ -613,7 +636,7 @@ if __name__ == "__main__":
             ]
         )
     cfg.checkpoint_path = "/scratch/tshu2/yyin34/projects/3d_belief/DFM/outputs/training/pixelsplat/habitat/full_cond/model-132.pt"
-    cfg.results_folder = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/belief_agent_back"
+    cfg.results_folder = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/outputs/belief_agent_plain"
     cfg.semantic_config = "/scratch/tshu2/yyin34/projects/3d_belief/embodied_belief/DFM/configurations/semantic/onehot.yaml"
 
     # Run planner
