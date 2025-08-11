@@ -81,25 +81,23 @@ class OracleNavSkill(SkillPolicy):
         if "teleport" in config:
             self.do_teleport = config.teleport
 
-        if self.do_teleport:
-            # Get indices for teleport action
-            target_pos_ends = find_action_range(
-                self.action_space, f"agent_{self.agent_uid}_teleport"
-            )
-            self.target_pos_range = range(target_pos_ends[0], target_pos_ends[1])
+        # Get indices for teleport action
+        target_pos_ends = find_action_range(
+            self.action_space, f"agent_{self.agent_uid}_teleport"
+        )
+        self.target_pos_range = range(target_pos_ends[0], target_pos_ends[1])
 
+        # Get indices for linear and angular velocities in the action tensor
+        if self.motion_type != "human_joints":
+            self.action_range = find_action_range(
+                self.action_space, f"agent_{self.agent_uid}_base_velocity"
+            )
         else:
-            # Get indices for linear and angular velocities in the action tensor
-            if self.motion_type != "human_joints":
-                self.action_range = find_action_range(
-                    self.action_space, f"agent_{self.agent_uid}_base_velocity"
-                )
-            else:
-                self.action_range = find_action_range(
-                    self.action_space, f"agent_{self.agent_uid}_humanoid_base_velocity"
-                )
-            self.linear_velocity_index = self.action_range[0]
-            self.angular_velocity_index = self.action_range[1] - 1
+            self.action_range = find_action_range(
+                self.action_space, f"agent_{self.agent_uid}_humanoid_base_velocity"
+            )
+        self.linear_velocity_index = self.action_range[0]
+        self.angular_velocity_index = self.action_range[1] - 1
 
     def reset(self, batch_idxs):
         super().reset(batch_idxs)
@@ -165,7 +163,7 @@ class OracleNavSkill(SkillPolicy):
             self.articulated_agent.params.leg_init_params
         )
 
-    def set_target(self, target_name: str, env):
+    def set_target(self, target_name, env):
         """
         Identify the target Entity (Receptacle, Object, Furniture) for the navigation skill and generate a target pose for the agent to reach the Entity.
 
@@ -175,6 +173,14 @@ class OracleNavSkill(SkillPolicy):
         # Early return if the target is already set
         if self.target_is_set:
             return
+
+        # Unpack parameters
+        if len(target_name) == 2:
+            target_name, teleport = target_name
+        else:
+            teleport = False
+        
+        self.do_teleport = teleport
 
         # Get Entity based on the target_name
         entity = self.env.world_graph[self.agent_uid].get_node_from_name(target_name)

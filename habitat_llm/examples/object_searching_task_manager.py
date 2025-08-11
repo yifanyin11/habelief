@@ -264,7 +264,7 @@ class ObjectSearchingTaskManager:
         observations = self.env_interface.get_observations()
         # Set agent to the starting position
         hl_action_name = "NavigatePose"
-        hl_action_input = (start_pose[:3, 3], False, True) # teleport to the starting pose
+        hl_action_input = (start_pose[:3, 3], False, False) # teleport to the starting pose
         hl_action_done = False
         while not hl_action_done:
             low_level_action, response = self.eval_runner.planner.agents[

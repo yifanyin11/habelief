@@ -12,8 +12,8 @@ oracle_nav_pose:
     max_skill_steps            : 600
     force_end_on_timeout       : True
 
-    dist_thresh                : 0.1
-    turn_thresh                : 0.2
+    dist_thresh                : 2.0
+    turn_thresh                : 1.5
     forward_velocity           : 10.0
     turn_velocity              : 10.0
     sim_freq                   : 120 # Hz

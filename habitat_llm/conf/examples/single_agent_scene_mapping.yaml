@@ -24,6 +24,7 @@ paths:
   epi_result_file_path: "${paths.results_dir}/episode_result_log.csv"
   run_result_file_path: "${paths.results_dir}/run_result_log.csv"
   end_result_file_path: "${paths.results_dir}/end_result_log.csv"
+  splits_file_path: "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/habelief/data/hssd-hab/scene_splits.yaml"
 
 device      : cuda
 instruction : ''
@@ -45,3 +46,6 @@ hydra:
     chdir: False
   run:
     dir: outputs/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}-${file_stem:${habitat.dataset.data_path}}
+
+trajectory:
+  enable_save_trigger: null

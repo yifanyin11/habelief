@@ -296,9 +296,9 @@ class Env:
         assert (
             self._episode_start_time is not None
         ), "Cannot call step before calling reset"
-        assert (
-            self._episode_over is False
-        ), "Episode over, call reset before calling step"
+        # assert (
+        #     self._episode_over is False
+        # ), "Episode over, call reset before calling step"
         assert (
             not self._episode_force_changed
         ), "Episode was changed either by setting current_episode or changing the episodes list. Call reset before stepping the environment again."

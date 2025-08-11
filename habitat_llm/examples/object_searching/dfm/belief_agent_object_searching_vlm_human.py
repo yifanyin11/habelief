@@ -167,7 +167,8 @@ def run_planner(cfg: DictConfig):
         "habitat.dataset.scenes_dir=data/hssd-hab/",
     ]
     SENSOR_OVERRIDES = [
-        "habitat.simulator.agents.main_agent.sim_sensors.jaw_depth_sensor.normalize_depth=False",
+        "habitat.simulator.agents.agent_0.sim_sensors.jaw_depth_sensor.normalize_depth=False",
+        "habitat.simulator.agents.agent_1.sim_sensors.head_depth_sensor.normalize_depth=False"
     ]
     LLM_OVERRIDES = [
         "llm@evaluation.planner.plan_config.llm=mock",
@@ -176,7 +177,7 @@ def run_planner(cfg: DictConfig):
         "evaluation.save_video=True",
         "evaluation.output_dir=./outputs",
         "trajectory.save=True",
-        "trajectory.agent_names=[main_agent]",
+        "trajectory.agent_names=[agent_1]",
         "trajectory.save_path=data/trajectories/habelief/test/",
     ]
 
@@ -187,7 +188,7 @@ def run_planner(cfg: DictConfig):
 
     # Setup config
     config_base = get_config(
-        "examples/single_agent_scene_mapping.yaml",
+        "examples/multi_agent_scene_mapping.yaml",
         overrides=DATASET_OVERRIDES
         + SENSOR_OVERRIDES
         + LLM_OVERRIDES
@@ -611,7 +612,7 @@ if __name__ == "__main__":
         cfg = compose(
             config_name="sp_reason.yaml",
             overrides=[
-                "sampling_steps=10",
+                "sampling_steps=50",
                 "semantic_mode=embed",
                 "semantic_viz=query",
                 "adjacent_angle=0.785",

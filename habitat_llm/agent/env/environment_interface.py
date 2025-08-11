@@ -143,8 +143,11 @@ class EnvironmentInterface:
 
         # empty variables to store the trajectory data initialized in
         # setup_logging_for_current_episode when save_trajectory is True
+        self.enable_save_trigger = True if self.conf.trajectory.enable_save_trigger is not None else False
+
         self.save_trajectory: bool = self.conf.trajectory.save
         self.save_options: list = None
+        self.save_trigger: bool = not self.enable_save_trigger
         self.trajectory_agent_names: list = None
         self.trajectory_save_paths: Dict[str, str] = None
         self.trajectory_save_prefix: str = None
@@ -411,6 +414,14 @@ class EnvironmentInterface:
 
         return
 
+    def set_save_trigger(self, save_trigger: bool):
+        """
+        Sets the save trigger for trajectory logging.
+        Args:
+            save_trigger (bool): Whether to trigger saving the trajectory.
+        """
+        self.save_trigger = save_trigger
+
     def get_observations(self):
         """
         Obtains the environment observations. In the form of a dictionary of tensors.
@@ -470,6 +481,7 @@ class EnvironmentInterface:
         # empty variables to store the trajectory data initialized in
         # setup_logging_for_current_episode when save_trajectory is True
         self.save_options = None
+        self.save_trigger = not self.enable_save_trigger
         self.trajectory_agent_names = None
         self.trajectory_save_paths = None
         self.trajectory_save_prefix = None
@@ -601,7 +613,7 @@ class EnvironmentInterface:
 
         return final_action_vector
 
-    def update_world_graphs(self, obs: Dict[str, Any], room_name: str = ""):
+    def update_world_graphs(self, obs: Dict[str, Any], room_name: str = "", furn_name: str = ""):
         """
         Simulates perception step using sim for GT condition and observations for non-GT condition
         Additionally, saves this trajectory step if trajectory_logger is enabled
@@ -628,7 +640,7 @@ class EnvironmentInterface:
             self.update_world_graphs_using_sim(obs)
 
         # if applicable save the data from trajectory step
-        self.save_trajectory_step(obs, room_name)
+        self.save_trajectory_step(obs, room_name, furn_name)
 
         return
 
@@ -857,7 +869,7 @@ class EnvironmentInterface:
                 formatted_text.append(f"{key}: {values_str}")
         return "\n".join(formatted_text)
 
-    def save_trajectory_step(self, obs, room_name=""):
+    def save_trajectory_step(self, obs, room_name="", furn_name=""):
         # save data from this time-step; for current episode_id and scene
         # also save the episode description in folder
         flag_0 = False
@@ -890,7 +902,7 @@ class EnvironmentInterface:
                         rgb = obs[f"{curr_agent}_{camera_source}_rgb"]
                     os.makedirs(
                         os.path.join(
-                            self.trajectory_save_paths[curr_agent], room_name, "rgb"
+                            self.trajectory_save_paths[curr_agent], room_name, furn_name, "rgb"
                         ),
                         exist_ok=True,
                     )
@@ -898,6 +910,7 @@ class EnvironmentInterface:
                         os.path.join(
                             self.trajectory_save_paths[curr_agent],
                             room_name,
+                            furn_name,
                             "rgb",
                             f"{self._trajectory_idx}.npy",
                         ),
@@ -907,6 +920,7 @@ class EnvironmentInterface:
                         os.path.join(
                             self.trajectory_save_paths[curr_agent],
                             room_name,
+                            furn_name,
                             "rgb",
                             f"{self._trajectory_idx}.jpg",
                         ),
@@ -919,7 +933,7 @@ class EnvironmentInterface:
                         depth = obs[f"{curr_agent}_{camera_source}_depth"]
                     os.makedirs(
                         os.path.join(
-                            self.trajectory_save_paths[curr_agent], room_name, "depth"
+                            self.trajectory_save_paths[curr_agent], room_name, furn_name, "depth"
                         ),
                         exist_ok=True,
                     )
@@ -928,6 +942,7 @@ class EnvironmentInterface:
                         os.path.join(
                             self.trajectory_save_paths[curr_agent],
                             room_name,
+                            furn_name,
                             "depth",
                             f"{self._trajectory_idx}.png",
                         ),
@@ -937,6 +952,7 @@ class EnvironmentInterface:
                         os.path.join(
                             self.trajectory_save_paths[curr_agent],
                             room_name,
+                            furn_name,
                             "depth",
                             f"{self._trajectory_idx}.npy",
                         ),
@@ -952,6 +968,7 @@ class EnvironmentInterface:
                         os.path.join(
                             self.trajectory_save_paths[curr_agent],
                             room_name,
+                            furn_name,
                             "panoptic",
                         ),
                         exist_ok=True,
@@ -961,6 +978,7 @@ class EnvironmentInterface:
                         os.path.join(
                             self.trajectory_save_paths[curr_agent],
                             room_name,
+                            furn_name,
                             "panoptic",
                             f"{self._trajectory_idx}.png",
                         ),
@@ -970,6 +988,7 @@ class EnvironmentInterface:
                         os.path.join(
                             self.trajectory_save_paths[curr_agent],
                             room_name,
+                            furn_name,
                             "panoptic",
                             f"{self._trajectory_idx}.npy",
                         ),
@@ -992,7 +1011,7 @@ class EnvironmentInterface:
 
                 os.makedirs(
                     os.path.join(
-                        self.trajectory_save_paths[curr_agent], room_name, "pose"
+                        self.trajectory_save_paths[curr_agent], room_name, furn_name, "pose"
                     ),
                     exist_ok=True,
                 )
@@ -1001,6 +1020,7 @@ class EnvironmentInterface:
                     os.path.join(
                         self.trajectory_save_paths[curr_agent],
                         room_name,
+                        furn_name,
                         "pose",
                         f"{self._trajectory_idx}.npy",
                     ),
@@ -1032,11 +1052,10 @@ class EnvironmentInterface:
                 )
             # save the world desciption for this step
             desc = self.world_graph_descr[agent_uid].get_world_descr()
-            self.trajectory_save_paths[agent], room_name, self._trajectory_idx
 
             os.makedirs(
                 os.path.join(
-                    self.trajectory_save_paths[agent], room_name, "world_desc"
+                    self.trajectory_save_paths[agent], room_name, furn_name, "world_desc"
                 ),
                 exist_ok=True,
             )
@@ -1045,6 +1064,7 @@ class EnvironmentInterface:
                 os.path.join(
                     self.trajectory_save_paths[agent],
                     room_name,
+                    furn_name,
                     "world_desc",
                     f"{self._trajectory_idx}.txt",
                 ),
@@ -1056,7 +1076,7 @@ class EnvironmentInterface:
             all_furnitures = self.full_world_graph.get_all_furnitures()
             os.makedirs(
                 os.path.join(
-                    self.trajectory_save_paths[agent], room_name, "all_furnitures"
+                    self.trajectory_save_paths[agent], room_name, furn_name, "all_furnitures"
                 ),
                 exist_ok=True,
             )
@@ -1065,6 +1085,7 @@ class EnvironmentInterface:
                 os.path.join(
                     self.trajectory_save_paths[agent],
                     room_name,
+                    furn_name,
                     "all_furnitures",
                     f"{self._trajectory_idx}.npy",
                 ),
@@ -1074,7 +1095,7 @@ class EnvironmentInterface:
             all_objects = self.full_world_graph.get_all_objects()
             os.makedirs(
                 os.path.join(
-                    self.trajectory_save_paths[agent], room_name, "all_objects"
+                    self.trajectory_save_paths[agent], room_name, furn_name,"all_objects"
                 ),
                 exist_ok=True,
             )
@@ -1083,6 +1104,7 @@ class EnvironmentInterface:
                 os.path.join(
                     self.trajectory_save_paths[agent],
                     room_name,
+                    furn_name,
                     "all_objects",
                     f"{self._trajectory_idx}.npy",
                 ),
@@ -1092,7 +1114,7 @@ class EnvironmentInterface:
             # save world graph for this step
             os.makedirs(
                 os.path.join(
-                    self.trajectory_save_paths[agent], room_name, "world_graph"
+                    self.trajectory_save_paths[agent], room_name, furn_name, "world_graph"
                 ),
                 exist_ok=True,
             )
@@ -1101,6 +1123,7 @@ class EnvironmentInterface:
                 os.path.join(
                     self.trajectory_save_paths[agent],
                     room_name,
+                    furn_name,
                     "world_graph",
                     f"{self._trajectory_idx}.npy",
                 ),
@@ -1110,7 +1133,7 @@ class EnvironmentInterface:
             # save partial world graph for this step
             os.makedirs(
                 os.path.join(
-                    self.trajectory_save_paths[agent], room_name, "partial_world_graph"
+                    self.trajectory_save_paths[agent], room_name, furn_name, "partial_world_graph"
                 ),
                 exist_ok=True,
             )
@@ -1119,6 +1142,7 @@ class EnvironmentInterface:
                 os.path.join(
                     self.trajectory_save_paths[agent],
                     room_name,
+                    furn_name,
                     "partial_world_graph",
                     f"{self._trajectory_idx}.npy",
                 ),
@@ -1127,14 +1151,16 @@ class EnvironmentInterface:
 
             self._trajectory_idx += 1
 
-    def step(self, low_level_actions, room_name=""):
+    def step(self, low_level_actions, room_name="", furn_name=""):
         """
         This method performs a single step through the environment given list of
         low level action vectors for one or both of the agents.
         """
 
         # Setup trajectory logging mechanism if not already done
-        if self.save_trajectory and not self._setup_current_episode_logging:
+        if self.save_trajectory and self.save_trigger and \
+                not self._setup_current_episode_logging:
+            # Setup logging for the current episode
             self.setup_logging_for_current_episode()
             self._setup_current_episode_logging = True
 
@@ -1145,7 +1171,7 @@ class EnvironmentInterface:
         obs, reward, done, info = self.env.step(final_action_vector)
 
         # Update world graphs
-        self.update_world_graphs(obs, room_name)
+        self.update_world_graphs(obs, room_name,furn_name)
 
         return obs, reward, done, info
 

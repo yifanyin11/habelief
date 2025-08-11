@@ -1,8 +1,8 @@
 # @package _global_
 defaults:
   - _self_
-dataset_root: /scratch/tshu2/yyin34/projects/3d_belief/partnr-planner/data/belief_tasks/nav/turn_around
-habelief_episode_root: /scratch/tshu2/yyin34/projects/3d_belief/partnr-planner/data/trajectories/habelief/test
+dataset_root: /home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/habelief/data/belief_tasks/nav/turn_around
+habelief_episode_root: /home/ubuntu/VLMP/tianmin-project/yyin34/dataset/habelief/habelief/test
 close_enough_distance: 1.2
 face_to_angle_threshold: 0.785  # 45 degrees in radians
 agent_id: 0
