@@ -11,6 +11,7 @@ import sys
 import time
 from tqdm import tqdm
 from math import pi, atan2
+import cv2
 
 ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)
 sys.path.append(ROOT_DIR)
@@ -109,6 +110,80 @@ def append_jsonl(path, record):
     with open(path, "a") as f:
         f.write(json.dumps(record, default=_to_native) + "\n")
 
+def project_cam_to_pixel(K, pc):
+    x, y, z = float(pc[0]), float(pc[1]), float(pc[2])
+    if z >= -1e-8:
+        return None
+    uvw = K @ np.array([x, y, z], dtype=np.float32)
+    u = float(uvw[0] / z)
+    v = float(uvw[1] / z)
+    u = float(K[0, 2] * 2.0 - u)
+    return (u, v)
+
+def compute_object_pixel_center(local_aabb, global_T, K, T_wc_inv, W, H):
+    corners_local = np.array([
+        local_aabb.front_bottom_left, local_aabb.front_bottom_right,
+        local_aabb.front_top_left,    local_aabb.front_top_right,
+        local_aabb.back_bottom_left,  local_aabb.back_bottom_right,
+        local_aabb.back_top_left,     local_aabb.back_top_right
+    ], dtype=np.float32)
+    corners_local_h = np.concatenate([corners_local, np.ones((8,1), dtype=np.float32)], axis=1)
+    corners_world_h = (np.array(global_T, dtype=np.float32) @ corners_local_h.T).T
+    uv_list = []
+    for k in range(8):
+        pw = corners_world_h[k, :3]
+        pc = world_to_camera(T_wc_inv, pw)
+        uv = project_cam_to_pixel(K, pc)
+        if uv is None:
+            continue
+        u, v = uv
+        if 0 <= u < W and 0 <= v < H:
+            uv_list.append((u, v))
+    if not uv_list:
+        return None
+    u_mean = int(round(np.mean([p[0] for p in uv_list])))
+    v_mean = int(round(np.mean([p[1] for p in uv_list])))
+    return (u_mean, v_mean)
+
+def draw_markers_rgb(rgb_img, A_px, B_px, label_A="A", label_B="B"):
+    img = rgb_img.copy()
+    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    def _draw(pt, text):
+        if pt is None:
+            return
+        r = 10
+        cv2.circle(img_bgr, pt, radius=r, color=(0, 0, 255), thickness=-1)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        thickness = 1
+        (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+        text_x = int(pt[0] - tw / 2)
+        text_y = int(pt[1] + th / 2)
+        cv2.putText(img_bgr, text, (text_x, text_y), font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+
+    _draw(A_px, label_A)
+    _draw(B_px, label_B)
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+def relation_statement(subject_name: str, object_name: str, relation: str) -> str:
+    s = clean_text(subject_name)
+    o = clean_text(object_name)
+    if relation == "left":
+        return f"The {s} (mark A) to the left of the {o} (mark B)."
+    if relation == "right":
+        return f"The {s} (mark A) to the right of the {o} (mark B)."
+    if relation == "front":
+        return f"The {s} (mark A) in front of the {o} (mark B)."
+    if relation == "back":
+        return f"The {s} (mark A) behind the {o} (mark B)."
+    if relation == "larger":
+        return f"The {s} (mark A) larger than the {o} (mark B)."
+    if relation == "closer":
+        return f"The {s} (mark A) closer than the {o} (mark B)."
+    return
+
+
 def process_frame_for_relationships(
     episode_id,
     room_name,
@@ -123,7 +198,6 @@ def process_frame_for_relationships(
     furn_ids_in_room,
     output_root
 ):
-
     frame_counts = {
         "left": 0,
         "right": 0,
@@ -135,9 +209,8 @@ def process_frame_for_relationships(
 
     rgb_path = os.path.join(room_path, "rgb", f"{frame_idx}.jpg")
     panoptic_path = os.path.join(room_path, "panoptic", f"{frame_idx}.png")
-
     if not (os.path.exists(rgb_path) and os.path.exists(panoptic_path)):
-        return
+        return frame_counts
 
     rgb = imageio.v2.imread(rgb_path)
     H, W = rgb.shape[0], rgb.shape[1]
@@ -147,17 +220,19 @@ def process_frame_for_relationships(
         pan, obj_id_to_name, ao_handle_to_id, furn_ids_in_room
     )
     if len(visible_ids) < 2:
-        return
+        return frame_counts
 
     visible_keep = []
     for oid in visible_ids:
         if oid not in all_bboxes:
             continue
         local_aabb, global_T = all_bboxes[oid]
-        bbox = compute_2d_bbox_from_aabb(local_aabb, np.array(global_T), np.array(K), np.array(T_wc_inv))
-        area_px = 0 if bbox["area"] == np.inf else float(bbox["area"])
-        H, W = rgb.shape[0], rgb.shape[1]
+        bbox = compute_2d_bbox_from_aabb(
+            local_aabb, np.array(global_T), np.array(K), np.array(T_wc_inv)
+        )
+        area_px = 0.0 if bbox["area"] == np.inf else float(bbox["area"])
         ratio = area_px / float(H * W + 1e-6)
+
         corners_local = np.array([
             local_aabb.front_bottom_left, local_aabb.front_bottom_right,
             local_aabb.front_top_left,    local_aabb.front_top_right,
@@ -167,28 +242,33 @@ def process_frame_for_relationships(
         corners_local_h = np.concatenate([corners_local, np.ones((8,1), dtype=np.float32)], axis=1)
         corners_world_h = (np.array(global_T, dtype=np.float32) @ corners_local_h.T).T
         center_world = corners_world_h[:, :3].mean(axis=0)
-        pc = world_to_camera(T_wc_inv, center_world)
-        depth_forward = max(0.0, -pc[2])
+        pc_center = world_to_camera(T_wc_inv, center_world)
+        depth_forward = max(0.0, -pc_center[2])
 
-        if ratio >= VISIBLE_BBOX_RATIO_MIN and area_px >= VISIBLE_BBOX_AREA_PX_MIN and depth_forward >= MIN_FORWARD_DEPTH_M:
+        if (
+            ratio >= VISIBLE_BBOX_RATIO_MIN
+            and area_px >= VISIBLE_BBOX_AREA_PX_MIN
+            and depth_forward >= MIN_FORWARD_DEPTH_M
+        ):
             visible_keep.append((oid, ratio))
 
     if len(visible_keep) < 2:
-        return
+        return frame_counts
 
     centers_cam = {}
+    centers_px = {}
     depths = {}
     areas = {}
 
     for oid, _ in visible_keep:
         local_aabb, global_T = all_bboxes[oid]
+
         corners_local = np.array([
             local_aabb.front_bottom_left, local_aabb.front_bottom_right,
             local_aabb.front_top_left,    local_aabb.front_top_right,
             local_aabb.back_bottom_left,  local_aabb.back_bottom_right,
             local_aabb.back_top_left,     local_aabb.back_top_right
         ], dtype=np.float32)
-
         corners_local_h = np.concatenate([corners_local, np.ones((8,1), dtype=np.float32)], axis=1)
         corners_world_h = (np.array(global_T, dtype=np.float32) @ corners_local_h.T).T
         center_world = corners_world_h[:, :3].mean(axis=0)
@@ -197,23 +277,25 @@ def process_frame_for_relationships(
         centers_cam[oid] = pc
         depths[oid] = max(0.0, -pc[2])
 
-        bbox = compute_2d_bbox_from_aabb(local_aabb, np.array(global_T), np.array(K), np.array(T_wc_inv))
-        area = 0.0 if bbox["area"] == np.inf else float(bbox["area"])
-        areas[oid] = area
-    
+        bbox = compute_2d_bbox_from_aabb(
+            local_aabb, np.array(global_T), np.array(K), np.array(T_wc_inv)
+        )
+        areas[oid] = 0.0 if bbox["area"] == np.inf else float(bbox["area"])
+
+        centers_px[oid] = compute_object_pixel_center(local_aabb, global_T, K, T_wc_inv, W, H)
+
     ep_room = f"{episode_id}_{room_name}"
     basename = f"{ep_room}_{frame_idx}"
 
     for i in range(len(visible_keep)):
         oidA = visible_keep[i][0]
-        for j in range(i+1, len(visible_keep)):
+        for j in range(i + 1, len(visible_keep)):
             oidB = visible_keep[j][0]
-
             nameA = obj_id_to_name.get(oidA, f"id{oidA}")
             nameB = obj_id_to_name.get(oidB, f"id{oidB}")
 
             v = centers_cam[oidA] - centers_cam[oidB]
-            card = classify_direction_sector(v[0], v[2])
+            card = classify_direction_sector(float(v[0]), float(v[2]))
             if card is not None:
                 out_dir = os.path.join(output_root, DIR_FOLDER, card)
                 ensure_dir(out_dir)
@@ -221,8 +303,13 @@ def process_frame_for_relationships(
 
                 out_name = f"{basename}__{sanitize(nameA)}__{card}__{sanitize(nameB)}.jpg"
                 out_path = os.path.join(out_dir, "rgb", out_name)
-                if not os.path.exists(out_path):
-                    shutil.copy(rgb_path, out_path)
+
+                img_marked = draw_markers_rgb(
+                    rgb_img=rgb,
+                    A_px=centers_px.get(oidA),
+                    B_px=centers_px.get(oidB),
+                )
+                imageio.v2.imwrite(out_path, img_marked)
 
                 rec = {
                     "episode_id": episode_id,
@@ -235,21 +322,23 @@ def process_frame_for_relationships(
                     "object": nameB,
                     "camera_depth_subject": float(depths[oidA]),
                     "camera_depth_object": float(depths[oidB]),
+                    "subject_pixel": centers_px.get(oidA),
+                    "object_pixel": centers_px.get(oidB),
+                    "statement": relation_statement(nameA, nameB, card),
                 }
                 append_jsonl(os.path.join(out_dir, "index.jsonl"), rec)
                 frame_counts[card] += 1
 
-
-            areaA = areas[oidA]
-            areaB = areas[oidB]
+            areaA = float(areas[oidA]); areaB = float(areas[oidB])
             if areaA > LARGER_RATIO_MIN * max(areaB, 1e-6):
                 out_dir = os.path.join(output_root, LARGER_FOLDER)
-                ensure_dir(out_dir)
-                ensure_dir(os.path.join(out_dir, "rgb"))
+                ensure_dir(out_dir); ensure_dir(os.path.join(out_dir, "rgb"))
                 out_name = f"{basename}__{sanitize(nameA)}__larger__{sanitize(nameB)}.jpg"
                 out_path = os.path.join(out_dir, "rgb", out_name)
-                if not os.path.exists(out_path):
-                    shutil.copy(rgb_path, out_path)
+
+                img_marked = draw_markers_rgb(rgb, centers_px.get(oidA), centers_px.get(oidB))
+                imageio.v2.imwrite(out_path, img_marked)
+
                 rec = {
                     "episode_id": episode_id,
                     "room": room_name,
@@ -259,45 +348,54 @@ def process_frame_for_relationships(
                     "relation": "larger",
                     "subject": nameA,
                     "object": nameB,
-                    "area_subject_px": areaA,
-                    "area_object_px": areaB,
-                    "area_ratio": areaA / max(areaB, 1e-6)
-                }
-                append_jsonl(os.path.join(out_dir, "index.jsonl"), rec)
-                frame_counts["larger"] += 1
-            elif areaB > LARGER_RATIO_MIN * max(areaA, 1e-6):
-                out_dir = os.path.join(output_root, LARGER_FOLDER)
-                ensure_dir(out_dir)
-                ensure_dir(os.path.join(out_dir, "rgb"))
-                out_name = f"{basename}__{sanitize(nameB)}__larger__{sanitize(nameA)}.jpg"
-                out_path = os.path.join(out_dir, "rgb", out_name)
-                if not os.path.exists(out_path):
-                    shutil.copy(rgb_path, out_path)
-                rec = {
-                    "episode_id": episode_id,
-                    "room": room_name,
-                    "frame": int(frame_idx),
-                    "image": out_name,
-                    "relation_type": "larger",
-                    "relation": "larger",
-                    "subject": nameB,
-                    "object": nameA,
-                    "area_subject_px": areaB,
-                    "area_object_px": areaA,
-                    "area_ratio": areaB / max(areaA, 1e-6)
+                    "area_subject_px": float(areaA),
+                    "area_object_px": float(areaB),
+                    "area_ratio": float(areaA / max(areaB, 1e-6)),
+                    "subject_pixel": centers_px.get(oidA),
+                    "object_pixel": centers_px.get(oidB),
+                    "statement": relation_statement(nameA, nameB, "larger"),
                 }
                 append_jsonl(os.path.join(out_dir, "index.jsonl"), rec)
                 frame_counts["larger"] += 1
 
-            dA, dB = depths[oidA], depths[oidB]
+            elif areaB > LARGER_RATIO_MIN * max(areaA, 1e-6):
+                out_dir = os.path.join(output_root, LARGER_FOLDER)
+                ensure_dir(out_dir); ensure_dir(os.path.join(out_dir, "rgb"))
+                out_name = f"{basename}__{sanitize(nameB)}__larger__{sanitize(nameA)}.jpg"
+                out_path = os.path.join(out_dir, "rgb", out_name)
+
+                img_marked = draw_markers_rgb(rgb, centers_px.get(oidB), centers_px.get(oidA))
+                imageio.v2.imwrite(out_path, img_marked)
+
+                rec = {
+                    "episode_id": episode_id,
+                    "room": room_name,
+                    "frame": int(frame_idx),
+                    "image": out_name,
+                    "relation_type": "larger",
+                    "relation": "larger",
+                    "subject": nameB,
+                    "object": nameA,
+                    "area_subject_px": float(areaB),
+                    "area_object_px": float(areaA),
+                    "area_ratio": float(areaB / max(areaA, 1e-6)),
+                    "subject_pixel": centers_px.get(oidB),
+                    "object_pixel": centers_px.get(oidA),
+                    "statement": relation_statement(nameB, nameA, "larger"),
+                }
+                append_jsonl(os.path.join(out_dir, "index.jsonl"), rec)
+                frame_counts["larger"] += 1
+
+            dA = float(depths[oidA]); dB = float(depths[oidB])
             if (dA - dB) > CLOSER_DELTA_MIN:
                 out_dir = os.path.join(output_root, CLOSER_FOLDER)
-                ensure_dir(out_dir)
-                ensure_dir(os.path.join(out_dir, "rgb"))
+                ensure_dir(out_dir); ensure_dir(os.path.join(out_dir, "rgb"))
                 out_name = f"{basename}__{sanitize(nameA)}__closer__{sanitize(nameB)}.jpg"
                 out_path = os.path.join(out_dir, "rgb", out_name)
-                if not os.path.exists(out_path):
-                    shutil.copy(rgb_path, out_path)
+
+                img_marked = draw_markers_rgb(rgb, centers_px.get(oidA), centers_px.get(oidB))
+                imageio.v2.imwrite(out_path, img_marked)
+
                 rec = {
                     "episode_id": episode_id,
                     "room": room_name,
@@ -307,20 +405,25 @@ def process_frame_for_relationships(
                     "relation": "closer",
                     "subject": nameA,
                     "object": nameB,
-                    "depth_subject": dA,
-                    "depth_object": dB,
-                    "depth_delta": dA - dB
+                    "depth_subject": float(dA),
+                    "depth_object": float(dB),
+                    "depth_delta": float(dA - dB),
+                    "subject_pixel": centers_px.get(oidA),
+                    "object_pixel": centers_px.get(oidB),
+                    "statement": relation_statement(nameA, nameB, "closer"),
                 }
                 append_jsonl(os.path.join(out_dir, "index.jsonl"), rec)
                 frame_counts["closer"] += 1
+
             elif (dB - dA) > CLOSER_DELTA_MIN:
                 out_dir = os.path.join(output_root, CLOSER_FOLDER)
-                ensure_dir(out_dir)
-                ensure_dir(os.path.join(out_dir, "rgb"))
+                ensure_dir(out_dir); ensure_dir(os.path.join(out_dir, "rgb"))
                 out_name = f"{basename}__{sanitize(nameB)}__closer__{sanitize(nameA)}.jpg"
                 out_path = os.path.join(out_dir, "rgb", out_name)
-                if not os.path.exists(out_path):
-                    shutil.copy(rgb_path, out_path)
+
+                img_marked = draw_markers_rgb(rgb, centers_px.get(oidB), centers_px.get(oidA))
+                imageio.v2.imwrite(out_path, img_marked)
+
                 rec = {
                     "episode_id": episode_id,
                     "room": room_name,
@@ -330,12 +433,16 @@ def process_frame_for_relationships(
                     "relation": "closer",
                     "subject": nameB,
                     "object": nameA,
-                    "depth_subject": dB,
-                    "depth_object": dA,
-                    "depth_delta": dB - dA
+                    "depth_subject": float(dB),
+                    "depth_object": float(dA),
+                    "depth_delta": float(dB - dA),
+                    "subject_pixel": centers_px.get(oidB),
+                    "object_pixel": centers_px.get(oidA),
+                    "statement": relation_statement(nameB, nameA, "closer"),
                 }
                 append_jsonl(os.path.join(out_dir, "index.jsonl"), rec)
                 frame_counts["closer"] += 1
+
     return frame_counts
 
 
@@ -377,7 +484,7 @@ def generate_relationship_dataset(data_root, output_root):
         room_names.sort()
         print(f"Episode: {episode_id} — rooms: {len(room_names)}")
 
-        for room_name in room_names:
+        for room_name in room_names[:1]:
             room_path = os.path.join(episode_path, room_name)
             intrinsics_path = os.path.join(room_path, "..", "intrinsics.npy")
             if not os.path.exists(intrinsics_path):
