@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 import imageio
 import re
+from pathlib import Path
 from copy import deepcopy
 
 ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)
@@ -36,28 +37,58 @@ from habitat_llm.world_model import Room
 from habitat_llm.utils.core import get_config
 from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 
-def parse_episode_string(episode_string: str) -> Dict[str, Any]:
+def parse_episode_path(path_str: str) -> Dict[str, Any]:
     """
-    Parse the episode string to extract:
+    Extract:
+      - episode_path: the input path itself
       - episode_name: 'epidx_<id>_scene_<scene_number>'
       - scene_number: '<digits>' or '<digits>_<digits>'
-      - room_name: '<word_word_...>_<digit>'
+      - room_name:    '<word_word_...>_<digit>'
     """
-    pattern = re.compile(
-        r'^'                                 # start of string
-        r'(epidx_\d+_scene_(\d+(?:_\d+)*))'  # 1=episode_name, 2=scene_number
-        r'_'
-        r'(([A-Za-z]+(?:_[A-Za-z]+)*)_\d+)'  # 3=room_name (allows multiple words)
-    )
-    m = pattern.match(episode_string)
-    if not m:
-        raise ValueError(f"Invalid episode string format: {episode_string!r}")
+    EPISODE_RE = re.compile(r'^(?P<episode_name>epidx_\d+_scene_(?P<scene_number>\d+(?:_\d+)*))$')
+    ROOM_RE = re.compile(r'^(?P<room_name>[A-Za-z]+(?:_[A-Za-z]+)*_\d+)$')
+    FURN_RE = re.compile(r'^.+_\d+-\d+$')
+
+    p = Path(path_str).resolve()
+    parts = list(p.parts)
+
+    # Find episode_name & scene_number
+    episode_name = None
+    scene_number = None
+    for part in parts:
+        m = EPISODE_RE.match(part)
+        if m:
+            episode_name = m.group('episode_name')
+            scene_number = m.group('scene_number')
+            break
+    if episode_name is None:
+        raise ValueError(f"Could not find episode_name in path: {path_str}")
+
+    # Find room_name:
+    room_name = None
+    if parts:
+        last = parts[-1]
+        if FURN_RE.match(last) and len(parts) >= 2:
+            candidate = parts[-2]
+            if ROOM_RE.match(candidate):
+                room_name = candidate
+
+    if room_name is None:
+        # Fallback: scan all parts to find a room-looking segment
+        for part in parts:
+            m = ROOM_RE.match(part)
+            if m:
+                room_name = m.group('room_name')
+                break
+
+    if room_name is None:
+        raise ValueError(f"Could not find room_name in path: {path_str}")
 
     return {
-        "episode_string": episode_string,
-        "episode_name": m.group(1),
-        "scene_number": m.group(2),
-        "room_name":   m.group(3),
+        "episode_path": str(p),
+        "episode_name": episode_name,
+        "scene_number": scene_number,
+        "room_name":    room_name,
     }
 
 def find_depth_value(points_3d, intrinsics, extrinsics):
@@ -167,12 +198,12 @@ def extract_obs(env_interface: EnvironmentInterface, obs: Dict[str, Any]):
 class ObjectSearchingTaskManager:
     def __init__(self, config: DictConfig, env_interface: EnvironmentInterface, dataset: CollaborationDatasetV0, eval_runner: CentralizedEvaluationRunner):
         self.config = config
-        self.dataset_root = config.dataset_root
         self.habelief_episode_root = config.habelief_episode_root
         self.close_enough_distance = config.close_enough_distance
         self.face_to_angle_threshold = config.face_to_angle_threshold
         self.agent_id = config.agent_id
-        self.episodes = [parse_episode_string(episode_string) for episode_string in os.listdir(self.dataset_root)]
+        self.episode_list = sorted([p for p in Path(self.habelief_episode_root).glob("*/agent_1/*/*/") if p.is_dir()])
+        self.episodes = [parse_episode_path(episode_path) for episode_path in self.episode_list]
         self.env_interface = env_interface
         self.eval_runner = eval_runner
         self.dataset = dataset
@@ -180,7 +211,7 @@ class ObjectSearchingTaskManager:
         self.target_obj = None
         self.target_obj_name = None
         self.target_obj_id = None
-        self.episode_string = None
+        self.episode_path = None
         self.episode_name = None
         self.scene_number = None
         self.room_name = None
@@ -200,18 +231,18 @@ class ObjectSearchingTaskManager:
             return
         # Extract agent starting pose and target object
         episode_info = self.episodes[self.current_episode_index]
-        self.episode_string = episode_info["episode_string"]
-        print(f"Resetting to episode: {self.episode_string}")
+        self.episode_path = episode_info["episode_path"]
+        print(f"Resetting to episode: {self.episode_path}")
         self.episode_name = episode_info["episode_name"]
         self.scene_number = episode_info["scene_number"]
         room_name = episode_info["room_name"]
         self.room_name = room_name
 
-        pose_path = os.path.join(self.dataset_root, self.episode_string, "video", "pose")
+        pose_path = os.path.join(self.episode_path, "pose")
         start_pose_file = sorted(os.listdir(pose_path))[0]
         start_pose_path = os.path.join(pose_path, start_pose_file)
         start_pose = np.load(start_pose_path, allow_pickle=True)
-        target_obj_path = os.path.join(self.dataset_root, self.episode_string, "entity_desc.txt")
+        target_obj_path = os.path.join(self.episode_path, "entity_desc.txt")
         # First line is the target object, second line is the target object id
         with open(target_obj_path, "r") as file:
             lines = file.readlines()
@@ -228,7 +259,7 @@ class ObjectSearchingTaskManager:
         object_handle_to_id = {v: k for k, v in object_id_to_handle.items()}
         ao_id_to_handle = np.load(os.path.join(self.habelief_episode_root, self.episode_name, "agent_1", "ao_id_to_handle.npy"), allow_pickle=True).item()
         ao_handle_to_id = {v: k for k, v in ao_id_to_handle.items()}
-        world_graph = np.load(os.path.join(self.habelief_episode_root, self.episode_name, "agent_1", room_name, "world_graph.npy"), allow_pickle=True).item()
+        world_graph = np.load(os.path.join(self.episode_path, "world_graph", "0.npy"), allow_pickle=True).item()
         all_furns = world_graph.get_all_furnitures()
 
         ao_furns = [furn for furn in all_furns if furn.sim_handle in ao_handle_to_id]
@@ -264,7 +295,7 @@ class ObjectSearchingTaskManager:
         observations = self.env_interface.get_observations()
         # Set agent to the starting position
         hl_action_name = "NavigatePose"
-        hl_action_input = (start_pose[:3, 3], False, False) # teleport to the starting pose
+        hl_action_input = (start_pose[:3, 3], True, False, (0.05, 0.1)) # teleport to the starting pose
         hl_action_done = False
         while not hl_action_done:
             low_level_action, response = self.eval_runner.planner.agents[
@@ -294,7 +325,7 @@ class ObjectSearchingTaskManager:
         new_pose[:3, 3] = t_new
 
         hl_action_name = "NavigatePose"
-        hl_action_input = (new_pose[:3, 3], False, False)
+        hl_action_input = (new_pose[:3, 3], True, False, (0.05, 0.1))
         hl_action_done = False
         while not hl_action_done:
             low_level_action, response = self.eval_runner.planner.agents[
@@ -349,7 +380,7 @@ class ObjectSearchingTaskManager:
         if world_graph.get_room_for_entity(world_graph.get_spot_robot()).name != self.room_name:
             cprint(f"Agent is outside the room {self.room_name}, resetting to the last position.", "red")
             hl_action_name = "NavigatePose"
-            hl_action_input = (self.last_position, False, False)
+            hl_action_input = (self.last_position, True, False, (0.05, 0.1))
             hl_action_done = False
             while not hl_action_done:
                 low_level_action, response = self.eval_runner.planner.agents[
@@ -381,7 +412,7 @@ class ObjectSearchingTaskManager:
         if depth_range < 0.1 or center_depth_val < 0.5:  # threshold for being too near a wall
             cprint(f"Agent is too near a wall, resetting to the last position.", "red")
             hl_action_name = "NavigatePose"
-            hl_action_input = (self.last_position, False, False)
+            hl_action_input = (self.last_position, True, False, (0.05, 0.1))
             hl_action_done = False
             while not hl_action_done:
                 low_level_action, response = self.eval_runner.planner.agents[

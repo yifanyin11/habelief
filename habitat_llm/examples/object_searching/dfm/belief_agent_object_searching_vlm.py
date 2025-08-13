@@ -621,7 +621,7 @@ if __name__ == "__main__":
                 "model.encoder.use_epipolar_transformer=False",
                 "model.encoder.use_image_condition=True",
                 "model.encoder.depth_predictor_time_embed=True",
-                "model.encoder.evolve_ctxt=False",
+                "model.encoder.evolve_ctxt=True",
                 "model.encoder.use_camera_pose=True",
                 "model.encoder.use_semantic=False",
                 "model.encoder.use_reg_model=False",
@@ -631,11 +631,11 @@ if __name__ == "__main__":
                 "model.encoder.inference_mode=False",
                 "model.encoder.backbone.use_diff_pos_embed=True",
                 "model.encoder.backbone.pose_condition_type=prope",
-                "agent.save_scene=True",
+                "agent.save_scene=False",
             ]
         )
-    cfg.checkpoint_path = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/DFM/outputs/weights/habelief/dfm_pose_prope/model-21.pt"
-    cfg.results_folder = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/outputs/belief_agent_pose_prope"
+    cfg.checkpoint_path = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/DFM/outputs/training/habelief_room/dfm/pose_cond_prope_evolve_ctxt/model-8.pt"
+    cfg.results_folder = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/outputs/belief_agent_pose_prope_evolve_ctxt"
     cfg.semantic_config = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/configurations/semantic/onehot.yaml"
 
     # Run planner

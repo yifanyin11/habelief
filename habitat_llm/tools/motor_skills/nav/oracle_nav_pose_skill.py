@@ -43,7 +43,7 @@ class OracleNavPoseSkill(SkillPolicy):
         # pre-computed target pose for the ArticulatedAgent. See set_target.
         self.target_base_pos: mn.Vector3 = None
         self.target_base_rot: float = None
-        self.facing_direction: float = None  # New variable to store facing direction
+        # self.facing_direction: float = None  # New variable to store facing direction
         self._has_reached_goal = torch.zeros(self._batch_size)
 
         # Define the velocity controller
@@ -55,6 +55,7 @@ class OracleNavPoseSkill(SkillPolicy):
 
         self.dist_thresh = config.dist_thresh
         self.turn_thresh = config.turn_thresh
+        self.raw_threshs = (self.dist_thresh, self.turn_thresh)
         self.forward_velocity = config.forward_velocity
         self.turn_velocity = config.turn_velocity
         self.sim_freq = config.sim_freq
@@ -96,7 +97,7 @@ class OracleNavPoseSkill(SkillPolicy):
         self.target_is_set = False
         self.target_base_pos = None
         self.target_base_rot = None
-        self.facing_direction = None  # Reset facing direction
+        # self.facing_direction = None  # Reset facing direction
         return
 
     def get_state_description(self):
@@ -166,14 +167,20 @@ class OracleNavPoseSkill(SkillPolicy):
         if self.target_is_set:
             return
         
-        # Unpack parameters, now with an optional facing_direction parameter
+        # # Unpack parameters, now with an optional facing_direction parameter
+        # if len(target_position) == 4:
+        #     target_position, face_to_obj, teleport, facing_direction = target_position
+        #     self.facing_direction = facing_direction  # Store the facing direction
+        # else:
+        #     target_position, face_to_obj, teleport = target_position
+        #     self.facing_direction = None
+
         if len(target_position) == 4:
-            target_position, face_to_obj, teleport, facing_direction = target_position
-            self.facing_direction = facing_direction  # Store the facing direction
+            target_position, face_to_obj, teleport, threshs = target_position
+            self.dist_thresh, self.turn_thresh = threshs
         else:
             target_position, face_to_obj, teleport = target_position
-            self.facing_direction = None
-            
+
         self.face_to_obj = face_to_obj
         self.do_teleport = teleport
 
@@ -245,7 +252,7 @@ class OracleNavPoseSkill(SkillPolicy):
                     mn.Vector3(self.target_base_pos) - mn.Vector3(self.target_pos)
                 ).length()
             attempts += 1
-
+        # print(f"**Found target base position: {self.target_base_pos}, rotation: {self.target_base_rot}, success: {success}, attempts: {attempts}")
         if success and pose_to_nav_point_dist <= max_pose_to_nav_point_dist:
             # Make target visible in simulator for debugging
             self.env.sim.dynamic_target = self.target_base_pos
@@ -323,11 +330,13 @@ class OracleNavPoseSkill(SkillPolicy):
                 self.target_base_pos, dtype=torch.float32
             ).to(action.device)
             
-            # Use facing_direction if provided, otherwise use target_base_rot
-            if self.facing_direction is not None:
-                action[cur_batch_idx, self.target_pos_range[4]] = self.facing_direction
-            else:
-                action[cur_batch_idx, self.target_pos_range[4]] = self.target_base_rot
+            # # Use facing_direction if provided, otherwise use target_base_rot
+            # if self.facing_direction is not None:
+            #     action[cur_batch_idx, self.target_pos_range[4]] = self.facing_direction
+            # else:
+            #     action[cur_batch_idx, self.target_pos_range[4]] = self.target_base_rot
+
+            action[cur_batch_idx, self.target_pos_range[4]] = self.target_base_rot
 
             # teleported agent has reached the goal
             self._has_reached_goal[cur_batch_idx] = 1
@@ -391,7 +400,7 @@ class OracleNavPoseSkill(SkillPolicy):
                 need_move_backward = self.rotation_collision_check(
                     cur_nav_targ,
                 )
-
+            # print(f"Need move backward: {need_move_backward}, dist_to_final_nav_targ: {dist_to_final_nav_targ}, angle_to_target: {angle_to_target}, at_goal: {at_goal}")
             if need_move_backward and self.enable_backing_up:
                 # Backward direction
                 forward = np.array([-1.0, 0, 0])
@@ -480,6 +489,9 @@ class OracleNavPoseSkill(SkillPolicy):
             # Populate the actions tensor
             action[cur_batch_idx, self.linear_velocity_index] = vel[0]
             action[cur_batch_idx, self.angular_velocity_index] = vel[1]
+
+        if at_goal:
+            self.dist_thresh, self.turn_thresh = self.raw_threshs
 
         return action, None
 
