@@ -1,4 +1,5 @@
 import os
+from pydoc import text
 import re
 import json
 import shutil
@@ -12,6 +13,7 @@ import time
 from tqdm import tqdm
 from math import pi, atan2
 import cv2
+import matplotlib.pyplot as plt
 
 ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)
 sys.path.append(ROOT_DIR)
@@ -23,8 +25,11 @@ from habitat_llm.perception.perception_sim import (
     compute_2d_bbox_from_aabb,
 )
 
+DEBUG_MODE = True
+DRAW_CENTER_USING_BBOX = True
+
 AGENT_NAME = "agent_1"
-VISIBLE_BBOX_RATIO_MIN = 0.06
+VISIBLE_BBOX_RATIO_MIN = 0.05
 VISIBLE_BBOX_AREA_PX_MIN = 1200
 MIN_FORWARD_DEPTH_M = 0.05
 DIRECTION_COMPONENT_MIN = 0.05
@@ -38,7 +43,7 @@ DIR_HALF_ANGLES = {
 
 DIR_MIN_XZ_DIST_M = 0.15
 LARGER_RATIO_MIN = 1.35
-CLOSER_DELTA_MIN = 0.35
+CLOSER_DELTA_MIN = 1
 
 DIR_FOLDER = "direction"
 LARGER_FOLDER = "larger"
@@ -79,9 +84,9 @@ def classify_direction_sector(vx: float, vz: float) -> str:
 
     theta = atan2(vx, -vz)
     diffs = {
-        "front": abs(theta),
+        "front": min(abs(theta - pi), abs(theta + pi)), # note that front/back is inverted under 
         "right": abs(theta - pi/2),
-        "back":  min(abs(theta - pi), abs(theta + pi)),
+        "back":  abs(theta),
         "left":  abs(theta + pi/2),
     }
 
@@ -145,11 +150,11 @@ def compute_object_pixel_center(local_aabb, global_T, K, T_wc_inv, W, H):
     v_mean = int(round(np.mean([p[1] for p in uv_list])))
     return (u_mean, v_mean)
 
-def draw_markers_rgb(rgb_img, A_px, B_px, label_A="A", label_B="B"):
+def draw_markers_rgb(rgb_img, A_px, B_px, A_bbox=None, B_bbox=None):
     img = rgb_img.copy()
     img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-    def _draw(pt, text):
+    def _draw_px(pt, text):
         if pt is None:
             return
         r = 10
@@ -161,9 +166,56 @@ def draw_markers_rgb(rgb_img, A_px, B_px, label_A="A", label_B="B"):
         text_x = int(pt[0] - tw / 2)
         text_y = int(pt[1] + th / 2)
         cv2.putText(img_bgr, text, (text_x, text_y), font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+    
+    def _draw_px_using_bbox(bbox, text):
+        pt = (int((bbox["x_min"] + bbox["x_max"]) / 2), int((bbox["y_min"] + bbox["y_max"]) / 2))
+        r = 10
+        cv2.circle(img_bgr, pt, radius=r, color=(0, 0, 255), thickness=-1)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        thickness = 1
+        (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+        text_x = int(pt[0] - tw / 2)
+        text_y = int(pt[1] + th / 2)
+        cv2.putText(img_bgr, text, (text_x, text_y), font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+    
+    def _draw_bbox(bbox, text):
+        x1, y1, x2, y2 = bbox["x_min"], bbox["y_min"], bbox["x_max"], bbox["y_max"]
+        h, w = img_bgr.shape[:2]
+        x1 = max(0, min(w - 1, int(x1)))
+        y1 = max(0, min(h - 1, int(y1)))
+        x2 = max(0, min(w - 1, int(x2)))
+        y2 = max(0, min(h - 1, int(y2)))
 
-    _draw(A_px, label_A)
-    _draw(B_px, label_B)
+        cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 0), thickness=2)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        thickness = 1
+        (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+
+        text_x = max(0, min(w - tw - 2, x1))
+        text_y = max(th + 2, y1 - 4)
+
+        bg_tl = (text_x - 2, text_y - th - 2)
+        bg_br = (text_x + tw + 2, text_y + 2)
+        bg_tl = (max(0, bg_tl[0]), max(0, bg_tl[1]))
+        bg_br = (min(w - 1, bg_br[0]), min(h - 1, bg_br[1]))
+        cv2.rectangle(img_bgr, bg_tl, bg_br, (0, 0, 0), thickness=-1)
+
+        cv2.putText(img_bgr, text, (text_x, text_y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
+
+    if A_bbox is not None and DRAW_CENTER_USING_BBOX:
+        _draw_px_using_bbox(A_bbox, "A")
+    else:
+        _draw_px(A_px, "A")
+    if B_bbox is not None and DRAW_CENTER_USING_BBOX:
+        _draw_px_using_bbox(B_bbox, "B")
+    else:
+        _draw_px(B_px, "B")
+    if A_bbox is not None and DEBUG_MODE:
+        _draw_bbox(A_bbox, "A")
+    if B_bbox is not None and DEBUG_MODE:
+        _draw_bbox(B_bbox, "B")
     return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
 def relation_statement(subject_name: str, object_name: str, relation: str) -> str:
@@ -257,7 +309,9 @@ def process_frame_for_relationships(
 
     centers_cam = {}
     centers_px = {}
+    distances = {}
     depths = {}
+    bboxes = {}
     areas = {}
 
     for oid, _ in visible_keep:
@@ -274,12 +328,17 @@ def process_frame_for_relationships(
         center_world = corners_world_h[:, :3].mean(axis=0)
 
         pc = world_to_camera(T_wc_inv, center_world)
+        T_cw = np.linalg.inv(T_wc_inv)
+        cam_world = T_cw[:3, 3].astype(np.float32)
+        dist_world = float(norm(center_world - cam_world))
+        distances[oid] = dist_world
         centers_cam[oid] = pc
         depths[oid] = max(0.0, -pc[2])
 
         bbox = compute_2d_bbox_from_aabb(
             local_aabb, np.array(global_T), np.array(K), np.array(T_wc_inv)
         )
+        bboxes[oid] = bbox
         areas[oid] = 0.0 if bbox["area"] == np.inf else float(bbox["area"])
 
         centers_px[oid] = compute_object_pixel_center(local_aabb, global_T, K, T_wc_inv, W, H)
@@ -308,6 +367,8 @@ def process_frame_for_relationships(
                     rgb_img=rgb,
                     A_px=centers_px.get(oidA),
                     B_px=centers_px.get(oidB),
+                    A_bbox=bboxes.get(oidA),
+                    B_bbox=bboxes.get(oidB),
                 )
                 imageio.v2.imwrite(out_path, img_marked)
 
@@ -336,7 +397,7 @@ def process_frame_for_relationships(
                 out_name = f"{basename}__{sanitize(nameA)}__larger__{sanitize(nameB)}.jpg"
                 out_path = os.path.join(out_dir, "rgb", out_name)
 
-                img_marked = draw_markers_rgb(rgb, centers_px.get(oidA), centers_px.get(oidB))
+                img_marked = draw_markers_rgb(rgb, centers_px.get(oidA), centers_px.get(oidB), A_bbox=bboxes.get(oidA), B_bbox=bboxes.get(oidB))
                 imageio.v2.imwrite(out_path, img_marked)
 
                 rec = {
@@ -364,7 +425,7 @@ def process_frame_for_relationships(
                 out_name = f"{basename}__{sanitize(nameB)}__larger__{sanitize(nameA)}.jpg"
                 out_path = os.path.join(out_dir, "rgb", out_name)
 
-                img_marked = draw_markers_rgb(rgb, centers_px.get(oidB), centers_px.get(oidA))
+                img_marked = draw_markers_rgb(rgb, centers_px.get(oidB), centers_px.get(oidA), A_bbox=bboxes.get(oidB), B_bbox=bboxes.get(oidA))
                 imageio.v2.imwrite(out_path, img_marked)
 
                 rec = {
@@ -386,15 +447,20 @@ def process_frame_for_relationships(
                 append_jsonl(os.path.join(out_dir, "index.jsonl"), rec)
                 frame_counts["larger"] += 1
 
-            dA = float(depths[oidA]); dB = float(depths[oidB])
-            if (dA - dB) > CLOSER_DELTA_MIN:
+            disA = float(distances[oidA]); disB = float(distances[oidB])
+            if (disA - disB) > CLOSER_DELTA_MIN:
+                print("distance to A:", disA)
+                print("distance to B:", disB)
                 out_dir = os.path.join(output_root, CLOSER_FOLDER)
                 ensure_dir(out_dir); ensure_dir(os.path.join(out_dir, "rgb"))
                 out_name = f"{basename}__{sanitize(nameA)}__closer__{sanitize(nameB)}.jpg"
                 out_path = os.path.join(out_dir, "rgb", out_name)
 
-                img_marked = draw_markers_rgb(rgb, centers_px.get(oidA), centers_px.get(oidB))
+                img_marked = draw_markers_rgb(rgb, centers_px.get(oidA), centers_px.get(oidB), A_bbox=bboxes.get(oidA), B_bbox=bboxes.get(oidB))
                 imageio.v2.imwrite(out_path, img_marked)
+                plt.imshow(img_marked)
+                plt.axis("off")
+                plt.show()
 
                 rec = {
                     "episode_id": episode_id,
@@ -405,9 +471,9 @@ def process_frame_for_relationships(
                     "relation": "closer",
                     "subject": nameA,
                     "object": nameB,
-                    "depth_subject": float(dA),
-                    "depth_object": float(dB),
-                    "depth_delta": float(dA - dB),
+                    "distance_subject": float(disA),
+                    "distance_object": float(disB),
+                    "distance_delta": float(disA - disB),
                     "subject_pixel": centers_px.get(oidA),
                     "object_pixel": centers_px.get(oidB),
                     "statement": relation_statement(nameA, nameB, "closer"),
@@ -415,14 +481,19 @@ def process_frame_for_relationships(
                 append_jsonl(os.path.join(out_dir, "index.jsonl"), rec)
                 frame_counts["closer"] += 1
 
-            elif (dB - dA) > CLOSER_DELTA_MIN:
+            elif (disA - disB) > CLOSER_DELTA_MIN:
+                print("distance to A:", disA)
+                print("distance to B:", disB)
                 out_dir = os.path.join(output_root, CLOSER_FOLDER)
                 ensure_dir(out_dir); ensure_dir(os.path.join(out_dir, "rgb"))
                 out_name = f"{basename}__{sanitize(nameB)}__closer__{sanitize(nameA)}.jpg"
                 out_path = os.path.join(out_dir, "rgb", out_name)
 
-                img_marked = draw_markers_rgb(rgb, centers_px.get(oidB), centers_px.get(oidA))
+                img_marked = draw_markers_rgb(rgb, centers_px.get(oidB), centers_px.get(oidA), A_bbox=bboxes.get(oidB), B_bbox=bboxes.get(oidA))
                 imageio.v2.imwrite(out_path, img_marked)
+                plt.imshow(img_marked)
+                plt.axis("off")
+                plt.show()
 
                 rec = {
                     "episode_id": episode_id,
@@ -433,9 +504,9 @@ def process_frame_for_relationships(
                     "relation": "closer",
                     "subject": nameB,
                     "object": nameA,
-                    "depth_subject": float(dB),
-                    "depth_object": float(dA),
-                    "depth_delta": float(dB - dA),
+                    "distance_subject": float(disB),
+                    "distance_object": float(disA),
+                    "distance_delta": float(disB - disA),
                     "subject_pixel": centers_px.get(oidB),
                     "object_pixel": centers_px.get(oidA),
                     "statement": relation_statement(nameB, nameA, "closer"),
