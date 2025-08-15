@@ -14,14 +14,16 @@ sys.path.append(ROOT_DIR)
 os.chdir(ROOT_DIR)
 sys.path.append("..")
 
-UNKNOWN_SEMANTIC_ID = 0
+from habitat_llm.perception.perception_sim import (
+    UNKNOWN_SEMANTIC_ID,
+    compute_2d_bbox_from_aabb,
+)
 
 # --- Config ---
 room_names = ["bathroom_1", "bedroom_1", "bedroom_2", "closet_1", "closet_2", "dining_room_1", "entryway_1", "hallway_1", "kitchen_1", "living_room_1", "office_1"]
 # room_names = ["bedroom_2"]
 ROOM_PATH_ROOT = "/home/zheyuanzhang/Documents/GitHub/habelief/data/trajectories/test/epidx_0_scene_106878960_174887073/agent_1/"
 DRAW_CENTER = True
-UNKNOWN_SEMANTIC_ID = 0
 
 def get_intrinsic_matrix(intrinsics_vector):
     fx, fy, cx, cy = intrinsics_vector[0], intrinsics_vector[1], intrinsics_vector[2], intrinsics_vector[3]
@@ -140,6 +142,7 @@ def main(room_path):
     frame_ids = sorted([int(Path(f).stem) for f in os.listdir(rgb_dir) if f.endswith(".jpg")])
     assert frame_ids, "No frames in rgb/"
     frame = frame_ids[0]
+    print("frame:", frame)
 
     img = imageio.v2.imread(os.path.join(rgb_dir, f"{frame}.jpg"))
     H, W = img.shape[:2]
@@ -159,7 +162,10 @@ def main(room_path):
     obj_id_to_handle = np.load(os.path.join(room_path, "..", "object_id_to_handle.npy"), allow_pickle=True).item()
     ao_id_to_handle = np.load(os.path.join(room_path, "..", "ao_id_to_handle.npy"), allow_pickle=True).item()
     ao_ids = set(ao_id_to_handle.values())
+    print("ao_ids:", ao_ids)
+    print("visible_ids before:", visible_ids)
     visible_ids = [i for i in visible_ids if i not in ao_ids]
+    print("visible_ids:", visible_ids)
     all_objects = np.load(os.path.join(room_path, "all_objects", sorted(os.listdir(os.path.join(room_path, "all_objects")))[0]), allow_pickle=True)
     all_furnitures = np.load(os.path.join(room_path, "all_furnitures", sorted(os.listdir(os.path.join(room_path, "all_furnitures")))[0]), allow_pickle=True)
     all_entities = list(all_objects) + list(all_furnitures)
@@ -168,8 +174,10 @@ def main(room_path):
         for obj_id, handle in obj_id_to_handle.items()
     }
     obj_id_to_name = {k: v for k, v in obj_id_to_name.items() if v is not None}
+    # print("obj_id_to_name:", obj_id_to_name)
 
     all_bboxes = np.load(os.path.join(room_path, "..", "all_bb.npy"), allow_pickle=True).item()
+    # print("ids of bboxes:", list(all_bboxes.keys()))
 
     fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
     ax.imshow(img)
@@ -177,27 +185,27 @@ def main(room_path):
 
     drawn = 0
     for oid in visible_ids:
-        if oid not in all_bboxes or oid not in obj_id_to_name:
+        if oid not in all_bboxes: # or oid not in obj_id_to_name:
             continue
+        print(f"Drawing bbox for object id: {oid}")
         name = obj_id_to_name.get(oid, f"id:{oid}")
         local_aabb, global_T = all_bboxes[oid]
         # print(f"{name}'s aabb:", local_aabb)
         # print(f"{name}'s global_T:", global_T)
         print(f"{name}'s local volume:", aabb_volume_from_local(local_aabb)[0])
         print(f"{name}'s global volume:", aabb_volume_from_global(local_aabb, global_T)[0])
-        bb = project_aabb_to_bbox2d(local_aabb, global_T, K, T_wc_inv, W, H)
+        bb = compute_2d_bbox_from_aabb(local_aabb, np.array(global_T), np.array(K), np.array(T_wc_inv))
         if bb is None:
             continue
-        (x1, y1, x2, y2), (cx, cy) = bb
-        area = (x2 - x1) * (y2 - y1)
-        print(f"{name}'s 2D bbox area:", area)
+        x1, y1, x2, y2 = bb["x_min"], bb["y_min"], bb["x_max"], bb["y_max"]
+        print(f"{name}'s 2D bbox area:", bb["area"])
 
         rect = Rectangle((x1, y1), (x2 - x1), (y2 - y1),
                          linewidth=2, edgecolor='lime', facecolor='none')
         ax.add_patch(rect)
 
         if DRAW_CENTER:
-            ax.add_patch(Circle((cx, cy), radius=3.0, color='red'))
+            ax.add_patch(Circle(((x1 + x2) / 2, (y1 + y2) / 2), radius=3.0, color='red'))
 
         ax.text(x1, max(0, y1 - 4), name,
                 fontsize=8, color='yellow', backgroundcolor='black')

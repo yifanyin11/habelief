@@ -80,7 +80,7 @@ def projected_bbox_ratio(local_aabb, global_transform, K, T_wc_inv, img_size):
 def list_visible_entity_ids_for_frame(panoptic_img, obj_id_to_name, ao_handle_to_id, furns_in_room_ids):
     unique = np.unique(panoptic_img)
     ids = [i - 100 for i in unique if i != UNKNOWN_SEMANTIC_ID]
-    ids += furns_in_room_ids
+    # ids += furns_in_room_ids
     ids = [i for i in ids if i in obj_id_to_name]
     return list(set(ids))
 
@@ -156,7 +156,7 @@ def compute_object_pixel_center(local_aabb, global_T, K, T_wc_inv, W, H):
     v_mean = int(round(np.mean([p[1] for p in uv_list])))
     return (u_mean, v_mean)
 
-def draw_markers_rgb(rgb_img, A_px, B_px, A_bbox=None, B_bbox=None):
+def draw_markers_rgb(rgb_img, A_px, B_px, A_bbox=None, B_bbox=None, A_name=None, B_name=None):
     img = rgb_img.copy()
     img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     def _draw_px(pt, text):
@@ -191,7 +191,7 @@ def draw_markers_rgb(rgb_img, A_px, B_px, A_bbox=None, B_bbox=None):
         y2 = max(0, min(h - 1, int(y2)))
         cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 0), thickness=2)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.5
+        font_scale = 0.3
         thickness = 1
         (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
         text_x = max(0, min(w - tw - 2, x1))
@@ -202,18 +202,18 @@ def draw_markers_rgb(rgb_img, A_px, B_px, A_bbox=None, B_bbox=None):
         bg_br = (min(w - 1, bg_br[0]), min(h - 1, bg_br[1]))
         cv2.rectangle(img_bgr, bg_tl, bg_br, (0, 0, 0), thickness=-1)
         cv2.putText(img_bgr, text, (text_x, text_y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
-    if A_bbox is not None and DRAW_CENTER_USING_BBOX:
+    if A_bbox is not None:
         _draw_px_using_bbox(A_bbox, "A")
-    else:
-        _draw_px(A_px, "A")
-    if B_bbox is not None and DRAW_CENTER_USING_BBOX:
+        # _draw_px(A_px, "A")
+    if B_bbox is not None:
         _draw_px_using_bbox(B_bbox, "B")
-    else:
-        _draw_px(B_px, "B")
-    if A_bbox is not None and DEBUG_MODE:
-        _draw_bbox(A_bbox, "A")
-    if B_bbox is not None and DEBUG_MODE:
-        _draw_bbox(B_bbox, "B")
+        # _draw_px(B_px, "B")
+    if DEBUG_MODE:
+        if A_bbox is not None:
+            _draw_bbox(A_bbox, "".join(A_name.split('_')[:-1]))
+    if DEBUG_MODE:
+        if B_bbox is not None:
+            _draw_bbox(B_bbox, "".join(B_name.split('_')[:-1]))
     return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
 def relation_statement(subject_name: str, object_name: str, relation: str) -> str:
@@ -301,9 +301,11 @@ def collect_frame_facts(
     rgb = imageio.v2.imread(rgb_path)
     H, W = rgb.shape[0], rgb.shape[1]
     pan = imageio.v2.imread(panoptic_path)
+    # print(f"frame idx: {frame_idx}")
     visible_ids = list_visible_entity_ids_for_frame(
         pan, obj_id_to_name, ao_handle_to_id, furn_ids_in_room
     )
+    # print(f"Visible ids: {visible_ids}")
     if len(visible_ids) < 1:
         return None
     visible_keep = []
@@ -397,9 +399,9 @@ def write_pair_sample(
     pair_id = f"{ep_room}_{frame_i}_to_{frame_j}__{sanitize(nameA)}__{sanitize(nameB)}"
     out_dir = os.path.join(out_root, PAIR_FOLDER, kind, pair_id)
     ensure_dir(os.path.join(out_dir, "rgb"))
-    ann_i = draw_markers_rgb(img_i, A_meta_i[0], B_meta_i[0], A_meta_i[1], B_meta_i[1])
+    ann_i = draw_markers_rgb(img_i, A_meta_i[0], B_meta_i[0], A_meta_i[1], B_meta_i[1], A_name=nameA, B_name=nameB)
     imageio.v2.imwrite(os.path.join(out_dir, "rgb", "1.jpg"), ann_i)
-    ann_j = draw_markers_rgb(img_j, A_meta_j[0], B_meta_j[0], A_meta_j[1], B_meta_j[1])
+    ann_j = draw_markers_rgb(img_j, A_meta_j[0], B_meta_j[0], A_meta_j[1], B_meta_j[1], A_name=nameA, B_name=nameB)
     imageio.v2.imwrite(os.path.join(out_dir, "rgb", "2.jpg"), ann_j)
     actions, forward_d = plan_actions(T_cw_i, T_cw_j)
     rec = {
@@ -518,8 +520,8 @@ def build_pairs_for_room(
                     nameO = obj_id_to_name.get(oid, f"id{oid}")
                     pair_id = f"{ep_room}_{fi}_to_{fj}__{sanitize(nameO)}"
                     out_dir = os.path.join(out_root, PAIR_FOLDER, "size", pair_id); ensure_dir(os.path.join(out_dir,"rgb"))
-                    ann_i = draw_markers_rgb(per_frame_facts[fi]["rgb"], cpi, None, A_bbox=bbi, B_bbox=None)
-                    ann_j = draw_markers_rgb(per_frame_facts[fj]["rgb"], cpj, None, A_bbox=bbj, B_bbox=None)
+                    ann_i = draw_markers_rgb(per_frame_facts[fi]["rgb"], cpi, None, A_bbox=bbi, B_bbox=None, A_name=nameO, B_name=None)
+                    ann_j = draw_markers_rgb(per_frame_facts[fj]["rgb"], cpj, None, A_bbox=bbj, B_bbox=None, A_name=nameO, B_name=None)
                     imageio.v2.imwrite(os.path.join(out_dir, "rgb", "1.jpg"), ann_i)
                     imageio.v2.imwrite(os.path.join(out_dir, "rgb", "2.jpg"), ann_j)
                     actions, forward_d = plan_actions(Ti, Tj)
@@ -542,8 +544,8 @@ def build_pairs_for_room(
                     nameO = obj_id_to_name.get(oid, f"id{oid}")
                     pair_id = f"{ep_room}_{fi}_to_{fj}__{sanitize(nameO)}"
                     out_dir = os.path.join(out_root, PAIR_FOLDER, "size", pair_id); ensure_dir(os.path.join(out_dir,"rgb"))
-                    ann_i = draw_markers_rgb(per_frame_facts[fi]["rgb"], cpi, None, A_bbox=bbi, B_bbox=None)
-                    ann_j = draw_markers_rgb(per_frame_facts[fj]["rgb"], cpj, None, A_bbox=bbj, B_bbox=None)
+                    ann_i = draw_markers_rgb(per_frame_facts[fi]["rgb"], cpi, None, A_bbox=bbi, B_bbox=None, A_name=nameO, B_name=None)
+                    ann_j = draw_markers_rgb(per_frame_facts[fj]["rgb"], cpj, None, A_bbox=bbj, B_bbox=None, A_name=nameO, B_name=None)
                     imageio.v2.imwrite(os.path.join(out_dir, "rgb", "1.jpg"), ann_i)
                     imageio.v2.imwrite(os.path.join(out_dir, "rgb", "2.jpg"), ann_j)
                     actions, forward_d = plan_actions(Ti, Tj)
@@ -593,7 +595,7 @@ def generate_relationship_dataset(data_root, output_root):
         ]
         room_names.sort()
         print(f"Episode: {episode_id} — rooms: {len(room_names)}")
-        for room_name in room_names[:5]:
+        for room_name in room_names:
             room_path = os.path.join(episode_path, room_name)
             intrinsics_path = os.path.join(room_path, "..", "intrinsics.npy")
             if not os.path.exists(intrinsics_path):
