@@ -404,6 +404,22 @@ def run_planner(cfg: DictConfig):
                 # dump the step log
                 with open(os.path.join(save_folder_sample, f"step_log_{step}.json"), "w") as f:
                     json.dump(step_log, f, indent=4)
+                
+                # Create and save a final visualization with just the observation where object was found
+                vis_path = os.path.join(save_folder_sample, "visualization.png")
+                prev_vis = Image.open(vis_path) if os.path.exists(vis_path) and step > 0 else None
+                
+                # Create a simplified visualization with only the observation image
+                final_visuals = {
+                    'visual_0': visual_0,
+                    'visual_1': None,
+                    'visual_2': [],
+                    'visual_3': None
+                }
+                
+                # Create a special version of visualization for success state
+                create_success_visualization(final_visuals, step, vis_path, prev_vis, target_obj)
+                
                 done = True
                 print(f"Found target object {target_obj} in observation {step}.")
                 continue
@@ -447,6 +463,7 @@ def run_planner(cfg: DictConfig):
                 optimal_belief_scene = None
                 optimal_key_poses = None
                 optimal_frames = None
+                optimal_scores = None
                 best_semantic_score = -1
                 for gidx, goal_dict in enumerate(goals):
                     path = goal_dict["path"]
@@ -503,6 +520,7 @@ def run_planner(cfg: DictConfig):
                         optimal_belief_scene = belief_scene
                         optimal_key_poses = key_poses
                         optimal_frames = imagined_frames
+                        optimal_scores = scores
                         optimal_goal = optimal_key_poses[max_idx].detach().cpu().numpy()[:3, 3]
 
                 # Set imagined occupancy map
@@ -541,6 +559,7 @@ def run_planner(cfg: DictConfig):
                 )
 
                 visual_2 = optimal_frames
+                visual_2_scores = optimal_scores
 
                 # plan a path to the goal
                 path = obs_map.plan(tuple(belief_obs["pose"][:3, 3].detach().cpu().numpy()), tuple(optimal_goal))
@@ -578,6 +597,7 @@ def run_planner(cfg: DictConfig):
                 'visual_0': visual_0,
                 'visual_1': visual_1,
                 'visual_2': visual_2,
+                'visual_2_scores': visual_2_scores,  # Add scores to the visuals dictionary
                 'visual_3': visual_3
             }
             
@@ -777,6 +797,7 @@ def create_step_visualization(visuals, step, save_path, prev_img=None):
             - visual_0: observation image
             - visual_1: imagined path image
             - visual_2: list of imagined frames
+            - visual_2_scores: list of scores for imagined frames
             - visual_3: path image
         step: Current step number
         save_path: Path to save the visualization
@@ -794,45 +815,85 @@ def create_step_visualization(visuals, step, save_path, prev_img=None):
     # Create a new figure for this step
     fig = plt.figure(figsize=(20, 5))
     
+    # Add step number as a title for the entire row
+    fig.suptitle(f"Step {step}", fontsize=20, y=0.98)
+    
     # Define grid - we'll create a special layout to show visuals in order 0,1,2,3
     if num_frames > 0:
         # Create a grid with proper proportions for the visual_2 frames
         gs = GridSpec(1, total_cols)
         
+        # Get reference height from visual_0 or first frame of visual_2
+        ref_height = visuals['visual_0'].shape[0] if 'visual_0' in visuals else visuals['visual_2'][0].shape[0]
+        
+        # Resize visual_1 and visual_3 to match reference height
+        if 'visual_1' in visuals and visuals['visual_1'] is not None:
+            h, w = visuals['visual_1'].shape[:2]
+            new_w = int(w * (ref_height / h))
+            visuals['visual_1'] = np.array(Image.fromarray(visuals['visual_1']).resize((new_w, ref_height)))
+            
+        if 'visual_3' in visuals and visuals['visual_3'] is not None:
+            h, w = visuals['visual_3'].shape[:2]
+            new_w = int(w * (ref_height / h))
+            visuals['visual_3'] = np.array(Image.fromarray(visuals['visual_3']).resize((new_w, ref_height)))
+        
         # Add visual_0
         ax0 = fig.add_subplot(gs[0, 0])
         ax0.imshow(visuals['visual_0'])
-        ax0.set_title('obs')
+        ax0.set_title('Obs', fontsize=18)
         ax0.axis('off')
         
         # Add visual_1
         ax1 = fig.add_subplot(gs[0, 1])
         ax1.imshow(visuals['visual_1'])
-        ax1.set_title('imag. path')
+        ax1.set_title('Imagined Path', fontsize=18)
         ax1.axis('off')
         
         # Add visual_2 (multiple frames)
         for i, frame in enumerate(visuals['visual_2']):
             ax = fig.add_subplot(gs[0, 2 + i])
             ax.imshow(frame)
-            if i == 0:
-                ax.set_title('imag. frames')
+            
+            # Add score as subtitle if available
+            if 'visual_2_scores' in visuals and i < len(visuals['visual_2_scores']):
+                score = visuals['visual_2_scores'][i]
+                title = f'Imag. Score: {score}'
+            else:
+                title = 'Imag. Frames' if i == 0 else ''
+                
+            ax.set_title(title, fontsize=18)
             ax.axis('off')
         
         # Add visual_3
         ax3 = fig.add_subplot(gs[0, total_cols - 1])
         ax3.imshow(visuals['visual_3'])
-        ax3.set_title('path')
+        ax3.set_title('path', fontsize=18)
         ax3.axis('off')
+        
     else:
         # If no frames in visual_2, just show the other visuals
         gs = GridSpec(1, 3)
         
+        # Get reference height from visual_0
+        if 'visual_0' in visuals and visuals['visual_0'] is not None:
+            ref_height = visuals['visual_0'].shape[0]
+            
+            # Resize visual_1 and visual_3 to match reference height
+            if 'visual_1' in visuals and visuals['visual_1'] is not None:
+                h, w = visuals['visual_1'].shape[:2]
+                new_w = int(w * (ref_height / h))
+                visuals['visual_1'] = np.array(Image.fromarray(visuals['visual_1']).resize((new_w, ref_height)))
+                
+            if 'visual_3' in visuals and visuals['visual_3'] is not None:
+                h, w = visuals['visual_3'].shape[:2]
+                new_w = int(w * (ref_height / h))
+                visuals['visual_3'] = np.array(Image.fromarray(visuals['visual_3']).resize((new_w, ref_height)))
+        
         # Add titles and images in order
         titles = {
-            'visual_0': 'obs',
-            'visual_1': 'imag. path',
-            'visual_3': 'path'
+            'visual_0': 'Obs',
+            'visual_1': 'Imag. Path',
+            'visual_3': 'Path'
         }
         
         # Add the individual images
@@ -840,11 +901,81 @@ def create_step_visualization(visuals, step, save_path, prev_img=None):
             if key in visuals and visuals[key] is not None:
                 ax = fig.add_subplot(gs[0, i])
                 ax.imshow(visuals[key])
-                ax.set_title(title)
+                ax.set_title(title, fontsize=18)
                 ax.axis('off')
     
+    # Add a bounding box around the entire row
+    from matplotlib.patches import Rectangle
+    fig.patches.extend([Rectangle((0, 0), 1, 1, fill=False, edgecolor='black', 
+                                 linewidth=2, transform=fig.transFigure)])
+    
     # Save this step's visualization temporarily
-    plt.tight_layout()
+    plt.tight_layout(rect=[0.01, 0.01, 0.99, 0.95])  # Adjust layout to account for the bounding box
+    temp_path = save_path.replace('.png', f'_temp_{step}.png')
+    plt.savefig(temp_path)
+    plt.close()
+    
+    # Now combine with previous visualization if it exists
+    step_img = Image.open(temp_path)
+    
+    if prev_img is None:
+        # First step, just save this image
+        step_img.save(save_path)
+        return step_img
+    else:
+        # Append this step to previous visualization
+        combined_height = prev_img.height + step_img.height
+        combined_img = Image.new('RGB', (max(prev_img.width, step_img.width), combined_height))
+        combined_img.paste(prev_img, (0, 0))
+        combined_img.paste(step_img, (0, prev_img.height))
+        combined_img.save(save_path)
+        
+        # Clean up temporary file
+        import os
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+        return combined_img
+
+def create_success_visualization(visuals, step, save_path, prev_img=None, target_obj=None):
+    """
+    Create a visualization for the success case, showing only the observation image
+    where the target object was found.
+    
+    Args:
+        visuals: Dictionary with visual elements (only visual_0 will be used)
+        step: Current step number
+        save_path: Path to save the visualization
+        prev_img: Previous visualization to append to
+        target_obj: Name of the target object that was found
+    """
+    # Convert PIL image to numpy array if needed
+    if 'visual_0' in visuals and isinstance(visuals['visual_0'], Image.Image):
+        visuals['visual_0'] = np.array(visuals['visual_0'])
+    
+    # Create a new figure for this step
+    fig = plt.figure(figsize=(10, 5))
+    
+    # Add step number and success message as a title
+    success_message = f"Step {step} - Found {target_obj}!"
+    fig.suptitle(success_message, fontsize=20, y=0.98, color='green')
+    
+    # Create a grid with just one column
+    gs = GridSpec(1, 1)
+    
+    # Add the observation image
+    ax = fig.add_subplot(gs[0, 0])
+    ax.imshow(visuals['visual_0'])
+    ax.set_title('Target Object Found', fontsize=18, color='green')
+    ax.axis('off')
+    
+    # Add a green bounding box to indicate success
+    from matplotlib.patches import Rectangle
+    fig.patches.extend([Rectangle((0, 0), 1, 1, fill=False, edgecolor='green', 
+                                 linewidth=3, transform=fig.transFigure)])
+    
+    # Save this step's visualization temporarily
+    plt.tight_layout(rect=[0.01, 0.01, 0.99, 0.95])
     temp_path = save_path.replace('.png', f'_temp_{step}.png')
     plt.savefig(temp_path)
     plt.close()
