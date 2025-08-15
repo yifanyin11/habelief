@@ -286,7 +286,7 @@ def run_planner(cfg: DictConfig):
 
     # initial reset to load first episode
     for idx in range(num_episodes):
-        obs = task_manager.reset(10)
+        obs = task_manager.reset()
         belief_agent.reset()
 
         target_obj = task_manager.target_obj
