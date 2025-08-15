@@ -167,7 +167,7 @@ def run_planner(cfg: DictConfig):
         "habitat.dataset.scenes_dir=data/hssd-hab/",
     ]
     SENSOR_OVERRIDES = [
-        "habitat.simulator.agents.agent_0.sim_sensors.jaw_depth_sensor.normalize_depth=False",
+        "habitat.simulator.agents.agent_0.sim_sensors.head_depth_sensor.normalize_depth=False",
         "habitat.simulator.agents.agent_1.sim_sensors.head_depth_sensor.normalize_depth=False"
     ]
     LLM_OVERRIDES = [

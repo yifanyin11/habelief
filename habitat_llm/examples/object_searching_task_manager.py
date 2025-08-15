@@ -295,8 +295,9 @@ class ObjectSearchingTaskManager:
         observations = self.env_interface.get_observations()
         # Set agent to the starting position
         hl_action_name = "NavigatePose"
-        hl_action_input = (start_pose[:3, 3], True, False, (0.05, 0.1)) # teleport to the starting pose
+        hl_action_input = (start_pose[:3, 3], True, False, (0.05, 0.05))
         hl_action_done = False
+        print(f"Resetting the environment to the starting pose: {hl_action_input}")
         while not hl_action_done:
             low_level_action, response = self.eval_runner.planner.agents[
                 self.agent_id
@@ -325,7 +326,7 @@ class ObjectSearchingTaskManager:
         new_pose[:3, 3] = t_new
 
         hl_action_name = "NavigatePose"
-        hl_action_input = (new_pose[:3, 3], True, False, (0.05, 0.1))
+        hl_action_input = (new_pose[:3, 3], True, False, (0.05, 0.05))
         hl_action_done = False
         while not hl_action_done:
             low_level_action, response = self.eval_runner.planner.agents[
@@ -352,6 +353,12 @@ class ObjectSearchingTaskManager:
         
         return obs
 
+    def set_last_position(self, position):
+        if isinstance(position, np.ndarray):
+            self.last_position = position.copy()
+        else:
+            raise ValueError("Position must be a numpy array.")
+
     def is_done(self) -> bool:
         # Get the agent's position
         base_T = self.env_interface.sim.agents_mgr[self.agent_id].articulated_agent.base_transformation
@@ -366,71 +373,4 @@ class ObjectSearchingTaskManager:
             cprint(f"Target object {self.target_obj_name} is in view and close enough.", "green")
             close_enough = True
         
-        # Check if the agent is looking at the target object
-        forward = np.array([1.0, 0, 0])
-        robot_forward = np.array(base_T.transform_vector(forward))[[0, 2]]
-        rel_direction = target_obj_position - agent_position
-        rel_direction = rel_direction[[0, 2]]
-        angle = get_angle(robot_forward, rel_direction)
-        face_to = abs(angle) < self.face_to_angle_threshold
-
-        extra_frames = []
-        # if the agent is move outside the room, reset the agent to the last position
-        world_graph = self.env_interface.full_world_graph
-        if world_graph.get_room_for_entity(world_graph.get_spot_robot()).name != self.room_name:
-            cprint(f"Agent is outside the room {self.room_name}, resetting to the last position.", "red")
-            hl_action_name = "NavigatePose"
-            hl_action_input = (self.last_position, True, False, (0.05, 0.1))
-            hl_action_done = False
-            while not hl_action_done:
-                low_level_action, response = self.eval_runner.planner.agents[
-                    self.agent_id
-                ].process_high_level_action(
-                    hl_action_name, hl_action_input, self.env_interface.get_observations()
-                )
-                low_level_action = {self.agent_id: low_level_action}
-
-                obs, _, _, _ = self.env_interface.step(
-                    low_level_action
-                )
-                observations = self.env_interface.parse_observations(obs)
-                frames_concat = self.eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
-                frames_concat = np.ascontiguousarray(frames_concat)
-                extra_frames.append(frames_concat)
-                if response:
-                    print(f"\tResponse: {response}")
-                    hl_action_done = True
-        
-        # if the agent is too near a wall, reset the agent to the last position
-        # check the depth value of the center of the depth map, if it is too small, reset the agent
-        # or if the depth map is too uniform (max and min are too close), reset the agent
-        depth = extract_obs(self.env_interface, self.env_interface.get_observations())["depth"][0, ..., 0]
-        center_depth = depth[depth.shape[0] // 2, depth.shape[1] // 2]
-        depth_range = (depth.max() - depth.min()).item()  # .item() to get a Python float
-        center_depth_val = center_depth.item() if torch.is_tensor(center_depth) else center_depth
-
-        if depth_range < 0.1 or center_depth_val < 0.5:  # threshold for being too near a wall
-            cprint(f"Agent is too near a wall, resetting to the last position.", "red")
-            hl_action_name = "NavigatePose"
-            hl_action_input = (self.last_position, True, False, (0.05, 0.1))
-            hl_action_done = False
-            while not hl_action_done:
-                low_level_action, response = self.eval_runner.planner.agents[
-                    self.agent_id
-                ].process_high_level_action(
-                    hl_action_name, hl_action_input, self.env_interface.get_observations()
-                )
-                low_level_action = {self.agent_id: low_level_action}
-
-                obs, _, _, _ = self.env_interface.step(
-                    low_level_action
-                )
-                observations = self.env_interface.parse_observations(obs)
-                frames_concat = self.eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
-                frames_concat = np.ascontiguousarray(frames_concat)
-                extra_frames.append(frames_concat)
-                if response:
-                    print(f"\tResponse: {response}")
-                    hl_action_done = True
-        print(f"Pass is_done check")
-        return close_enough, extra_frames
+        return close_enough

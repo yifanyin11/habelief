@@ -25,6 +25,9 @@ from pathlib import Path
 import math
 import json
 import time
+import magnum as mn
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 
 ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)
 sys.path.append(ROOT_DIR)
@@ -57,11 +60,6 @@ from agents.vlm_agent import VLMAgent
 from pixelbelief.belief_agent import BeliefAgent, prepare_video
 from pixelbelief.occupancy import OccupancyMap
 from pixelsplat.ply_export import export_gaussians_to_ply
-from rollout_utils import unnormalize_intrinsic, visualize_semantic_query_intensity_map
-
-def get_agent_room_name(env_interface: EnvironmentInterface):
-    world_graph = env_interface.full_world_graph
-    return world_graph.get_room_for_entity(world_graph.get_human()).name
 
 def extract_obs(env_interface: EnvironmentInterface, obs: Dict[str, Any]):
 
@@ -148,15 +146,57 @@ def pose_habitat2belief(extrinsics, first_pose):
     print("pose_belief shape", pose_belief.shape)
     return pose_belief
 
+def point_in_room(env_interface: EnvironmentInterface, point: np.ndarray, room_name: str):
+    room_region = [region for region in env_interface.perception.sim.semantic_scene.regions if env_interface.perception.region_id_to_name[region.id] == room_name][0]
+    return room_region.contains(mn.Vector3(point[0], point[1], point[2]))
+
+def is_too_close_to_wall(env_interface: EnvironmentInterface, point: np.ndarray, forward: np.ndarray, buffer: float = 0.3):
+    d = env_interface.perception.sim.pathfinder.distance_to_closest_obstacle(point, 10.0)
+    hit = env_interface.perception.sim.pathfinder.closest_obstacle_surface_point(point, 10.0)
+    hit_normal = -hit.hit_normal
+    # convert to np.array
+    hit_normal = np.array([hit_normal[0], hit_normal[1], hit_normal[2]])
+    # check if forward is close to the hit normal
+    forward = np.array(forward)
+    forward = forward / np.linalg.norm(forward)
+    hit_normal = hit_normal / np.linalg.norm(hit_normal)
+    angle = np.arccos(np.clip(np.dot(forward, hit_normal), -1.0, 1.0))
+    if (d < buffer and angle < np.pi / 4) or d < buffer / 10:
+        return True
+    return False
+
+def get_current_position_and_forward(env_interface: EnvironmentInterface):
+    camera_source = env_interface.conf.trajectory.camera_prefixes[0]
+    current_pose = np.linalg.inv(
+        env_interface.sim.agents[0]
+        ._sensors[f"{camera_source}_rgb"]
+        .render_camera.camera_matrix
+    )
+    current_position = current_pose[:3, 3]
+    current_forward = current_pose[:3, 2]
+    return current_position, current_forward
+
+def rotation_angle(initial_direction, target_direction):
+    # Normalize the vectors
+    initial_direction_normalized = initial_direction / np.linalg.norm(initial_direction)
+    target_direction_normalized = target_direction / np.linalg.norm(target_direction)
+    
+    # Find the rotation angle (arc cosine of the dot product)
+    cos_angle = np.dot(initial_direction_normalized, target_direction_normalized)
+    cos_angle = np.clip(cos_angle, -1.0, 1.0)
+    angle = np.arccos(cos_angle)
+    return angle
+
 # Method to load agent planner from the config
 def run_planner(cfg: DictConfig):
     run_dir = cfg.results_folder
     save_scene = cfg.agent.save_scene
     num_imagined_trajectories = cfg.agent.num_imagined_trajectories
     semantic_thred = cfg.agent.semantic_thred
+    adjacent_angle = cfg.adjacent_angle
+    adjacent_distance = cfg.adjacent_distance
     # Initialize the belief agent
     belief_agent = BeliefAgent(cfg)
-    belief_agent.reset()
 
     # Setup a seed
     seed = 47668090
@@ -246,7 +286,8 @@ def run_planner(cfg: DictConfig):
 
     # initial reset to load first episode
     for idx in range(num_episodes):
-        obs = task_manager.reset()
+        obs = task_manager.reset(10)
+        belief_agent.reset()
 
         target_obj = task_manager.target_obj
         # DEBUG
@@ -281,13 +322,6 @@ def run_planner(cfg: DictConfig):
             save_folder_obs, exist_ok=True,
         )
 
-        # DEBUG
-        save_folder_obs_semantics = os.path.join(save_folder_observation, f'obs_semantics')
-        os.makedirs(
-            save_folder_obs_semantics, exist_ok=True,
-        )
-        ## DEBUG
-
         save_folder_obs_obs_map = os.path.join(save_folder_observation, f'obs_maps')
         os.makedirs(
             save_folder_obs_obs_map, exist_ok=True,
@@ -298,32 +332,17 @@ def run_planner(cfg: DictConfig):
             save_folder_obs_height_map, exist_ok=True,
         )
 
-        save_folder_direct = os.path.join(save_folder_planning, f'direct')
-        os.makedirs(
-            save_folder_direct, exist_ok=True,
-        )
-
-        save_folder_imagined = os.path.join(save_folder_planning, f'imagined')
-        os.makedirs(
-            save_folder_imagined, exist_ok=True,
-        )
-
-        save_folder_height_map_direct = os.path.join(save_folder_direct, f'height_map')
-        os.makedirs(
-            save_folder_height_map_direct, exist_ok=True,
-        )
-
-        save_folder_height_map = os.path.join(save_folder_imagined, f'height_map')
+        save_folder_height_map = os.path.join(save_folder_planning, f'height_map')
         os.makedirs(
             save_folder_height_map, exist_ok=True,
         )
 
-        save_folder_imagine = os.path.join(save_folder_imagined, f'imagined_frames')
+        save_folder_imagine = os.path.join(save_folder_planning, f'imagined_frames')
         os.makedirs(
             save_folder_imagine, exist_ok=True,
         )
 
-        save_folder_obs_map = os.path.join(save_folder_imagined, f'obs_map')
+        save_folder_obs_map = os.path.join(save_folder_planning, f'obs_map')
         os.makedirs(
             save_folder_obs_map, exist_ok=True,
         )
@@ -349,7 +368,11 @@ def run_planner(cfg: DictConfig):
                 os.path.join(save_folder_obs, f"observed_{step}.png")
             )
             
+            visual_0 = habitat_obs["rgb"]
+
             belief_obs = BeliefAgent.convert_to_belief_obs(habitat_obs, first_pose_habitat)
+
+            current_location = belief_obs["pose"][:3, 3].detach().cpu().numpy()
             
             # observe with the current observation
             belief_agent.observe([belief_obs["rgb"]], [belief_obs["pose"]])
@@ -370,7 +393,7 @@ def run_planner(cfg: DictConfig):
                 object_name=target_obj,
             )
 
-            # If new observation contains the target object, set goal to that point
+            # If new observation contains the target object, set success
             if success:
                 step_log = {
                     "step": idx,
@@ -392,10 +415,29 @@ def run_planner(cfg: DictConfig):
                 )   
                 print("# Goals", len(goals))
 
+                backup_goal = goals[-1]
+
+                # filter out goals that not in the room
+                goals = [goal for goal in goals if point_in_room(
+                    env_interface, 
+                    BeliefAgent.points_belief2habitat([goal["pose"][-1][:3, 3]], first_pose_habitat)[0],
+                    task_manager.room_name
+                )]
+                # filter out goals that are too close to a wall
+                goals = [goal for goal in goals if not is_too_close_to_wall(
+                    env_interface,
+                    BeliefAgent.points_belief2habitat([goal["pose"][-1][:3, 3]], first_pose_habitat)[0],
+                    forward=BeliefAgent.pose_belief2habitat(goal["pose"][-1], first_pose_habitat)[:3, 2],
+                    buffer=0.2
+                )]
+
+                goals.append(backup_goal)
+
                 # keep at most num_imagined_trajectories goals
-                if len(goals) > num_imagined_trajectories:
-                    goals = random.sample(goals, num_imagined_trajectories)
-                
+                if len(goals) > num_imagined_trajectories-1:
+                    goals = random.sample(goals, num_imagined_trajectories-1)
+                # append the backup goal
+
                 save_folder_imagine_step = os.path.join(save_folder_imagine, f'step_{step}')
                 os.makedirs(
                     save_folder_imagine_step, exist_ok=True,
@@ -404,10 +446,13 @@ def run_planner(cfg: DictConfig):
                 optimal_goal = None
                 optimal_belief_scene = None
                 optimal_key_poses = None
+                optimal_frames = None
                 best_semantic_score = -1
                 for gidx, goal_dict in enumerate(goals):
                     path = goal_dict["path"]
                     poses = goal_dict["pose"]
+
+                    imagined_frames = []
 
                     belief_agent.obs_map.save_height_map(
                         os.path.join(save_folder_height_map, f"height_map_with_goals_{step}_{gidx}.png"), path=path
@@ -432,6 +477,7 @@ def run_planner(cfg: DictConfig):
                         Image.fromarray(frame).save(
                             os.path.join(save_folder_imagine_step_goal, f"rendered_{p}.png")
                         )
+                        imagined_frames.append(frame)
 
                     # object detection on the imagined frames
                     results = vlm.prompt_score_obj_folder(
@@ -456,6 +502,7 @@ def run_planner(cfg: DictConfig):
                         best_semantic_score = semantic_score
                         optimal_belief_scene = belief_scene
                         optimal_key_poses = key_poses
+                        optimal_frames = imagined_frames
                         optimal_goal = optimal_key_poses[max_idx].detach().cpu().numpy()[:3, 3]
 
                 # Set imagined occupancy map
@@ -482,6 +529,19 @@ def run_planner(cfg: DictConfig):
                     goals=[optimal_goal],
                 )
 
+                imagined_key_points = [key.detach().cpu().numpy()[:3, 3] for key in optimal_key_poses]
+                # add current_location as the first point
+                imagined_key_points.insert(0, current_location)
+
+                visual_1 = belief_agent.obs_map.save_occupancy_map(
+                    os.path.join(save_folder_obs_map, f"imagined_path_obs_map_{step}.png"),
+                    goals=[current_location],
+                    path=imagined_key_points,
+                    return_image=True
+                )
+
+                visual_2 = optimal_frames
+
                 # plan a path to the goal
                 path = obs_map.plan(tuple(belief_obs["pose"][:3, 3].detach().cpu().numpy()), tuple(optimal_goal))
                 if path is None:
@@ -501,19 +561,48 @@ def run_planner(cfg: DictConfig):
                     face_to_object = True
                 else:
                     face_to_object = False
-            
-            path_habitat = BeliefAgent.points_belief2habitat(path, first_pose_habitat)
-            path_habitat_exe = path_habitat[:len(path_habitat)//4+1] # TODO find a subset of the path with step size
 
-            # Navigate following a subset of the path
+            visual_3 = belief_agent.obs_map.save_occupancy_map(
+                os.path.join(save_folder_planning, f"path_obs_map_{step}.png"),
+                goals=[current_location],
+                path=path[:len(path)+1],
+                return_image=True
+            )
+            
+            # Create and save visualization with all visuals
+            vis_path = os.path.join(save_folder_sample, "visualization.png")
+            prev_vis = Image.open(vis_path) if os.path.exists(vis_path) and step > 0 else None
+            
+            # Create a dictionary of visuals
+            visuals = {
+                'visual_0': visual_0,
+                'visual_1': visual_1,
+                'visual_2': visual_2,
+                'visual_3': visual_3
+            }
+            
+            # Update the visualization
+            _ = create_step_visualization(visuals, step, vis_path, prev_vis)
+
+            path_habitat = BeliefAgent.points_belief2habitat(path, first_pose_habitat)
+            path_habitat_exe = path_habitat[:len(path_habitat)+1] # TODO find a subset of the path with step size
+
+            # record current forward direction
+            current_position, current_forward = get_current_position_and_forward(env_interface)
+            z_previous = current_forward
+            t_previous = current_position
+
+            # navigate following a subset of the path
             hl_action_name = "NavigatePose"
 
             debug_frames = []
 
+            observations = env_interface.get_observations()
+
             hl_action_input = path_habitat_exe[-1]
             hl_action_done = False
             print(f"Navigating to {hl_action_input}")
-            hl_action_input = (hl_action_input, face_to_object, False)
+            hl_action_input = (hl_action_input, face_to_object, False, (0.05, 0.1))
 
             while not hl_action_done:
                 low_level_action, response = eval_runner.planner.agents[
@@ -530,10 +619,90 @@ def run_planner(cfg: DictConfig):
                 frames_concat = eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
                 frames_concat = np.ascontiguousarray(frames_concat)
                 debug_frames.append(frames_concat)
+                t_current, z_current = get_current_position_and_forward(env_interface)
+                angle = rotation_angle(z_previous, z_current)
+                distance = np.linalg.norm(t_current - t_previous)
+                if angle > adjacent_angle or distance > adjacent_distance:
+                    break
                 
                 if response:
                     print(f"\tResponse: {response}")
                     hl_action_done = True
+
+            # check if the agent is still in the room
+            world_graph = env_interface.full_world_graph
+            if world_graph.get_room_for_entity(world_graph.get_spot_robot()).name != task_manager.room_name:
+                cprint(f"Agent is outside the room {task_manager.room_name}, resetting to the last position.", "red")
+                hl_action_name = "NavigatePose"
+                hl_action_input = (task_manager.last_position, True, False, (0.05, 0.1))
+                hl_action_done = False
+                while not hl_action_done:
+                    low_level_action, response = eval_runner.planner.agents[
+                        task_manager.agent_id
+                    ].process_high_level_action(
+                        hl_action_name, hl_action_input, env_interface.get_observations()
+                    )
+                    low_level_action = {task_manager.agent_id: low_level_action}
+
+                    obs, _, _, _ = env_interface.step(
+                        low_level_action
+                    )
+                    observations = env_interface.parse_observations(obs)
+                    frames_concat = eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
+                    frames_concat = np.ascontiguousarray(frames_concat)
+                    debug_frames.append(frames_concat)
+
+                    t_current, z_current = get_current_position_and_forward(env_interface)
+                    angle = rotation_angle(z_previous, z_current)
+                    distance = np.linalg.norm(t_current - t_previous)
+                    if angle > adjacent_angle or distance > adjacent_distance:
+                        break
+
+                    if response:
+                        print(f"\tResponse: {response}")
+                        hl_action_done = True
+
+            t_current, z_current = get_current_position_and_forward(env_interface)
+
+            # check if the agent is too close to a wall
+            if is_too_close_to_wall(
+                env_interface,
+                t_current,
+                z_current,
+                buffer=0.2,
+            ):
+                cprint("Agent is too close to a wall, resetting to the last position.", "red")
+                hl_action_name = "NavigatePose"
+                hl_action_input = (task_manager.last_position, True, False, (0.05, 0.1))
+                hl_action_done = False
+                while not hl_action_done:
+                    low_level_action, response = eval_runner.planner.agents[
+                        task_manager.agent_id
+                    ].process_high_level_action(
+                        hl_action_name, hl_action_input, env_interface.get_observations()
+                    )
+                    low_level_action = {task_manager.agent_id: low_level_action}
+
+                    obs, _, _, _ = env_interface.step(
+                        low_level_action
+                    )
+                    observations = env_interface.parse_observations(obs)
+                    frames_concat = eval_runner.dvu._DebugVideoUtil__get_combined_frames(observations)
+                    frames_concat = np.ascontiguousarray(frames_concat)
+                    debug_frames.append(frames_concat)
+
+                    t_current, z_current = get_current_position_and_forward(env_interface)
+                    angle = rotation_angle(z_previous, z_current)
+                    distance = np.linalg.norm(t_current - t_previous)
+                    if angle > adjacent_angle or distance > adjacent_distance:
+                        break
+
+                    if response:
+                        print(f"\tResponse: {response}")
+                        hl_action_done = True
+
+            step_position, _ = get_current_position_and_forward(env_interface)
+            task_manager.set_last_position(step_position)
 
             # step end time
             step_end_time = time.time()
@@ -549,8 +718,7 @@ def run_planner(cfg: DictConfig):
             # append elements in debug_frames to all_frames
             all_frames.extend(debug_frames)
 
-            is_done, extra_frames = task_manager.is_done()
-            all_frames.extend(extra_frames)
+            is_done = task_manager.is_done()
             if is_done:
                 print(f"Episode {idx} completed.")
                 done = True
@@ -600,6 +768,108 @@ def run_planner(cfg: DictConfig):
 
     env_interface.sim.close()
 
+def create_step_visualization(visuals, step, save_path, prev_img=None):
+    """
+    Create a visualization that combines multiple visual elements.
+    
+    Args:
+        visuals: Dictionary with visual elements:
+            - visual_0: observation image
+            - visual_1: imagined path image
+            - visual_2: list of imagined frames
+            - visual_3: path image
+        step: Current step number
+        save_path: Path to save the visualization
+        prev_img: Previous visualization to append to (if not the first step)
+    """
+    # Convert PIL images to numpy arrays if needed
+    for key in ['visual_0', 'visual_1', 'visual_3']:
+        if key in visuals and isinstance(visuals[key], Image.Image):
+            visuals[key] = np.array(visuals[key])
+    
+    # Calculate how many frames in visual_2
+    num_frames = len(visuals['visual_2']) if 'visual_2' in visuals else 0
+    total_cols = 3 + num_frames  # visual_0, visual_1, visual_2 (multiple frames), visual_3
+    
+    # Create a new figure for this step
+    fig = plt.figure(figsize=(20, 5))
+    
+    # Define grid - we'll create a special layout to show visuals in order 0,1,2,3
+    if num_frames > 0:
+        # Create a grid with proper proportions for the visual_2 frames
+        gs = GridSpec(1, total_cols)
+        
+        # Add visual_0
+        ax0 = fig.add_subplot(gs[0, 0])
+        ax0.imshow(visuals['visual_0'])
+        ax0.set_title('obs')
+        ax0.axis('off')
+        
+        # Add visual_1
+        ax1 = fig.add_subplot(gs[0, 1])
+        ax1.imshow(visuals['visual_1'])
+        ax1.set_title('imag. path')
+        ax1.axis('off')
+        
+        # Add visual_2 (multiple frames)
+        for i, frame in enumerate(visuals['visual_2']):
+            ax = fig.add_subplot(gs[0, 2 + i])
+            ax.imshow(frame)
+            if i == 0:
+                ax.set_title('imag. frames')
+            ax.axis('off')
+        
+        # Add visual_3
+        ax3 = fig.add_subplot(gs[0, total_cols - 1])
+        ax3.imshow(visuals['visual_3'])
+        ax3.set_title('path')
+        ax3.axis('off')
+    else:
+        # If no frames in visual_2, just show the other visuals
+        gs = GridSpec(1, 3)
+        
+        # Add titles and images in order
+        titles = {
+            'visual_0': 'obs',
+            'visual_1': 'imag. path',
+            'visual_3': 'path'
+        }
+        
+        # Add the individual images
+        for i, (key, title) in enumerate(titles.items()):
+            if key in visuals and visuals[key] is not None:
+                ax = fig.add_subplot(gs[0, i])
+                ax.imshow(visuals[key])
+                ax.set_title(title)
+                ax.axis('off')
+    
+    # Save this step's visualization temporarily
+    plt.tight_layout()
+    temp_path = save_path.replace('.png', f'_temp_{step}.png')
+    plt.savefig(temp_path)
+    plt.close()
+    
+    # Now combine with previous visualization if it exists
+    step_img = Image.open(temp_path)
+    
+    if prev_img is None:
+        # First step, just save this image
+        step_img.save(save_path)
+        return step_img
+    else:
+        # Append this step to previous visualization
+        combined_height = prev_img.height + step_img.height
+        combined_img = Image.new('RGB', (max(prev_img.width, step_img.width), combined_height))
+        combined_img.paste(prev_img, (0, 0))
+        combined_img.paste(step_img, (0, prev_img.height))
+        combined_img.save(save_path)
+        
+        # Clean up temporary file
+        import os
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+        return combined_img
 
 if __name__ == "__main__":
     cprint(

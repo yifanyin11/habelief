@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - /training@             : base_train
-  - /habitat_conf          : oracle_spot_kinematic_multi_agent
+  - /habitat_conf          : oracle_stretch_kinematic_multi_agent
   - /habitat_conf/task     : rearrange_easy_multi_agent
   - /evaluation            : centralized_evaluation_runner_multi_agent
   - /habitat/simulator/agents@habitat.simulator.agents.agent_1: human
@@ -18,7 +18,7 @@ defaults:
   - _self_
 
 world_model:
-  partial_obs: True
+  partial_obs: False
 
 robot_agent_uid: 0
 human_agent_uid: 1
