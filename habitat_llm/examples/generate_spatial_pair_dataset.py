@@ -25,7 +25,7 @@ from habitat_llm.perception.perception_sim import (
     compute_2d_bbox_from_aabb,
 )
 
-DEBUG_MODE = True
+DEBUG_MODE = False
 DRAW_CENTER_USING_BBOX = True
 
 AGENT_NAME = "agent_1"
@@ -396,8 +396,8 @@ def write_pair_sample(
     T_cw_i, T_cw_j,
     stats=None
 ):
-    pair_id = f"{ep_room}_{frame_i}_to_{frame_j}__{sanitize(nameA)}__{sanitize(nameB)}"
-    out_dir = os.path.join(out_root, PAIR_FOLDER, kind, pair_id)
+    pair_id = f"{frame_i}_to_{frame_j}__{sanitize(nameA)}__{sanitize(nameB)}"
+    out_dir = os.path.join(out_root, PAIR_FOLDER, kind, ep_room, pair_id)
     ensure_dir(os.path.join(out_dir, "rgb"))
     ann_i = draw_markers_rgb(img_i, A_meta_i[0], B_meta_i[0], A_meta_i[1], B_meta_i[1], A_name=nameA, B_name=nameB)
     imageio.v2.imwrite(os.path.join(out_dir, "rgb", "1.jpg"), ann_i)
@@ -407,7 +407,7 @@ def write_pair_sample(
     rec = {
         "episode_room": ep_room,
         "frames": [int(frame_i), int(frame_j)],
-        "rgb_folder": os.path.join(PAIR_FOLDER, kind, pair_id, "rgb"),
+        "rgb_folder": os.path.join(PAIR_FOLDER, kind, ep_room, pair_id, "rgb"),
         "relation_type": kind,
         "objects": [nameA, nameB],
         "frame1_relation": A_meta_i[2],
@@ -518,8 +518,8 @@ def build_pairs_for_room(
                 area_j, cpj, bbj = size_obs[(oid,fj)]
                 if area_i > LARGER_RATIO_MIN * max(area_j,1e-6):
                     nameO = obj_id_to_name.get(oid, f"id{oid}")
-                    pair_id = f"{ep_room}_{fi}_to_{fj}__{sanitize(nameO)}"
-                    out_dir = os.path.join(out_root, PAIR_FOLDER, "size", pair_id); ensure_dir(os.path.join(out_dir,"rgb"))
+                    pair_id = f"{fi}_to_{fj}__{sanitize(nameO)}"
+                    out_dir = os.path.join(out_root, PAIR_FOLDER, "size", ep_room, pair_id); ensure_dir(os.path.join(out_dir,"rgb"))
                     ann_i = draw_markers_rgb(per_frame_facts[fi]["rgb"], cpi, None, A_bbox=bbi, B_bbox=None, A_name=nameO, B_name=None)
                     ann_j = draw_markers_rgb(per_frame_facts[fj]["rgb"], cpj, None, A_bbox=bbj, B_bbox=None, A_name=nameO, B_name=None)
                     imageio.v2.imwrite(os.path.join(out_dir, "rgb", "1.jpg"), ann_i)
@@ -528,7 +528,7 @@ def build_pairs_for_room(
                     rec = {
                         "episode_room": ep_room,
                         "frames": [int(fi), int(fj)],
-                        "rgb_folder": os.path.join(PAIR_FOLDER, "size", pair_id, "rgb"),
+                        "rgb_folder": os.path.join(PAIR_FOLDER, "size", ep_room, pair_id, "rgb"),
                         "relation_type": "size",
                         "object": nameO,
                         "frame1_relation": "A-larger",
@@ -542,8 +542,8 @@ def build_pairs_for_room(
                         stats["size_pairs"] += 1
                 elif area_j > LARGER_RATIO_MIN * max(area_i,1e-6):
                     nameO = obj_id_to_name.get(oid, f"id{oid}")
-                    pair_id = f"{ep_room}_{fi}_to_{fj}__{sanitize(nameO)}"
-                    out_dir = os.path.join(out_root, PAIR_FOLDER, "size", pair_id); ensure_dir(os.path.join(out_dir,"rgb"))
+                    pair_id = f"{fi}_to_{fj}__{sanitize(nameO)}"
+                    out_dir = os.path.join(out_root, PAIR_FOLDER, "size", ep_room, pair_id); ensure_dir(os.path.join(out_dir,"rgb"))
                     ann_i = draw_markers_rgb(per_frame_facts[fi]["rgb"], cpi, None, A_bbox=bbi, B_bbox=None, A_name=nameO, B_name=None)
                     ann_j = draw_markers_rgb(per_frame_facts[fj]["rgb"], cpj, None, A_bbox=bbj, B_bbox=None, A_name=nameO, B_name=None)
                     imageio.v2.imwrite(os.path.join(out_dir, "rgb", "1.jpg"), ann_i)
@@ -552,7 +552,7 @@ def build_pairs_for_room(
                     rec = {
                         "episode_room": ep_room,
                         "frames": [int(fi), int(fj)],
-                        "rgb_folder": os.path.join(PAIR_FOLDER, "size", pair_id, "rgb"),
+                        "rgb_folder": os.path.join(PAIR_FOLDER, "size", ep_room, pair_id, "rgb"),
                         "relation_type": "size",
                         "object": nameO,
                         "frame1_relation": "A-smaller",
@@ -585,7 +585,7 @@ def generate_relationship_dataset(data_root, output_root):
     episodes = [d for d in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, d))]
     episodes.sort()
     print(f"[START] Scanning dataset root: {data_root}")
-    for episode_id in episodes[:1]:
+    for episode_id in episodes:
         episode_path = os.path.join(data_root, episode_id, AGENT_NAME)
         if not os.path.isdir(episode_path):
             continue

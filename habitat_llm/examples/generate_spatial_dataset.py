@@ -84,7 +84,7 @@ def classify_direction_sector(vx: float, vz: float) -> str:
 
     theta = atan2(vx, -vz)
     diffs = {
-        "front": min(abs(theta - pi), abs(theta + pi)), # note that front/back is inverted under 
+        "front": min(abs(theta - pi), abs(theta + pi)), # note that front/back is inverted under english convention
         "right": abs(theta - pi/2),
         "back":  abs(theta),
         "left":  abs(theta + pi/2),
@@ -449,8 +449,8 @@ def process_frame_for_relationships(
 
             disA = float(distances[oidA]); disB = float(distances[oidB])
             if (disA - disB) > CLOSER_DELTA_MIN:
-                print("distance to A:", disA)
-                print("distance to B:", disB)
+                # print("distance to A:", disA)
+                # print("distance to B:", disB)
                 out_dir = os.path.join(output_root, CLOSER_FOLDER)
                 ensure_dir(out_dir); ensure_dir(os.path.join(out_dir, "rgb"))
                 out_name = f"{basename}__{sanitize(nameA)}__closer__{sanitize(nameB)}.jpg"
@@ -458,9 +458,9 @@ def process_frame_for_relationships(
 
                 img_marked = draw_markers_rgb(rgb, centers_px.get(oidA), centers_px.get(oidB), A_bbox=bboxes.get(oidA), B_bbox=bboxes.get(oidB))
                 imageio.v2.imwrite(out_path, img_marked)
-                plt.imshow(img_marked)
-                plt.axis("off")
-                plt.show()
+                # plt.imshow(img_marked)
+                # plt.axis("off")
+                # plt.show()
 
                 rec = {
                     "episode_id": episode_id,
@@ -482,8 +482,8 @@ def process_frame_for_relationships(
                 frame_counts["closer"] += 1
 
             elif (disA - disB) > CLOSER_DELTA_MIN:
-                print("distance to A:", disA)
-                print("distance to B:", disB)
+                # print("distance to A:", disA)
+                # print("distance to B:", disB)
                 out_dir = os.path.join(output_root, CLOSER_FOLDER)
                 ensure_dir(out_dir); ensure_dir(os.path.join(out_dir, "rgb"))
                 out_name = f"{basename}__{sanitize(nameB)}__closer__{sanitize(nameA)}.jpg"
@@ -491,9 +491,9 @@ def process_frame_for_relationships(
 
                 img_marked = draw_markers_rgb(rgb, centers_px.get(oidB), centers_px.get(oidA), A_bbox=bboxes.get(oidB), B_bbox=bboxes.get(oidA))
                 imageio.v2.imwrite(out_path, img_marked)
-                plt.imshow(img_marked)
-                plt.axis("off")
-                plt.show()
+                # plt.imshow(img_marked)
+                # plt.axis("off")
+                # plt.show()
 
                 rec = {
                     "episode_id": episode_id,

@@ -133,6 +133,7 @@ def main(room_path):
     
     intrinsics = np.load(os.path.join(room_path, "..", "intrinsics.npy"), allow_pickle=True)[0]
     K = get_intrinsic_matrix(intrinsics)
+    print("K:", K)
 
     rgb_dir = os.path.join(room_path, "rgb")
     pose_dir = os.path.join(room_path, "pose")
