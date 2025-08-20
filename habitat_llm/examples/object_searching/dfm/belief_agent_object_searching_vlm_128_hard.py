@@ -274,9 +274,11 @@ def run_planner(cfg: DictConfig):
     robot_agent_uid = manager_config.agent_id
     max_steps = manager_config.max_steps
 
+    hard_episodes = [72, 62, 16, 96, 90, 134, 140]
+
     # initial reset to load first episode
-    for idx in range(num_episodes):
-        obs = task_manager.reset()
+    for idx, episode in enumerate(hard_episodes):
+        obs = task_manager.reset(episode)
         belief_agent.reset()
 
         target_obj = task_manager.target_obj
@@ -1111,7 +1113,7 @@ if __name__ == "__main__":
             ]
         )
     cfg.checkpoint_path = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/DFM/outputs/weights/habelief/dfm_pose_prope_evolve_ctxt_128/model-5.pt"
-    cfg.results_folder = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/outputs/belief_agent_pose_prope_evolve_ctxt_128_"
+    cfg.results_folder = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/outputs/belief_agent_pose_prope_evolve_ctxt_128_hard"
     cfg.semantic_config = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/configurations/semantic/onehot.yaml"
 
     # Run planner

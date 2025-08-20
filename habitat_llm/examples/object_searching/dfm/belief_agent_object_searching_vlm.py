@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 # isort: skip_file
 
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
-
-"""
-This script implements structured episodes over a collection of scenes, which
-ask the agent to go to each furniture within the scene and save a RGBD+pose trajectory.
-This trajectory is then used to create a map of the scenes through Concept-Graphs.
-"""
-
 import sys
 import os
 import random
@@ -286,7 +276,7 @@ def run_planner(cfg: DictConfig):
 
     # initial reset to load first episode
     for idx in range(num_episodes):
-        obs = task_manager.reset()
+        obs = task_manager.reset(114)
         belief_agent.reset()
 
         target_obj = task_manager.target_obj
@@ -1116,7 +1106,7 @@ if __name__ == "__main__":
             ]
         )
     cfg.checkpoint_path = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/DFM/outputs/training/habelief_room/dfm/pose_cond_prope_evolve_ctxt/model-8.pt"
-    cfg.results_folder = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/outputs/belief_agent_pose_prope_evolve_ctxt"
+    cfg.results_folder = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/outputs/belief_agent_pose_prope_evolve_ctxt_hard"
     cfg.semantic_config = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/configurations/semantic/onehot.yaml"
 
     # Run planner

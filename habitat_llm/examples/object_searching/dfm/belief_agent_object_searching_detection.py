@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 # isort: skip_file
 
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
-
-"""
-This script implements structured episodes over a collection of scenes, which
-ask the agent to go to each furniture within the scene and save a RGBD+pose trajectory.
-This trajectory is then used to create a map of the scenes through Concept-Graphs.
-"""
-
 import sys
 import os
 import random

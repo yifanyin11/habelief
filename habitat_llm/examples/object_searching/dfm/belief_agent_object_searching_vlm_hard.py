@@ -273,10 +273,11 @@ def run_planner(cfg: DictConfig):
     num_episodes = len(task_manager.episodes)
     robot_agent_uid = manager_config.agent_id
     max_steps = manager_config.max_steps
+    hard_episodes = [72, 62, 16, 96, 90, 134, 140]
 
     # initial reset to load first episode
-    for idx in range(num_episodes):
-        obs = task_manager.reset()
+    for idx, episode in enumerate(hard_episodes):
+        obs = task_manager.reset(episode)
         belief_agent.reset()
 
         target_obj = task_manager.target_obj
@@ -360,7 +361,7 @@ def run_planner(cfg: DictConfig):
             
             visual_0 = habitat_obs["rgb"]
 
-            belief_obs = BeliefAgent.convert_to_belief_obs(habitat_obs, first_pose_habitat, image_size=cfg.dataset.camera.h)
+            belief_obs = BeliefAgent.convert_to_belief_obs(habitat_obs, first_pose_habitat)
 
             current_location = belief_obs["pose"][:3, 3].detach().cpu().numpy()
             
@@ -491,8 +492,8 @@ def run_planner(cfg: DictConfig):
                         image_folder=save_folder_imagine_step_goal,
                         object_name=target_obj,
                     )
-                    presences = [ele[0] for ele in results][:len(imagined_frames)]
-                    scores = [ele[1] for ele in results][:len(imagined_frames)]
+                    presences = [ele[0] for ele in results]
+                    scores = [ele[1] for ele in results]
                     max_idx = np.argmax(scores)
                     semantic_score = scores[max_idx]
                     
@@ -1089,7 +1090,6 @@ if __name__ == "__main__":
                 "adjacent_distance=1.0",
                 "clean_target=False",
                 "use_history=False",
-                "image_size=128",
                 "model.encoder.use_epipolar_transformer=False",
                 "model.encoder.use_image_condition=True",
                 "model.encoder.depth_predictor_time_embed=True",
@@ -1101,17 +1101,13 @@ if __name__ == "__main__":
                 "model.encoder.d_semantic_reg=384",
                 "model.encoder.gaussians_per_pixel=3",
                 "model.encoder.inference_mode=False",
-                "model.encoder.backbone.input_size=[128,128]",
                 "model.encoder.backbone.use_diff_pos_embed=True",
                 "model.encoder.backbone.pose_condition_type=prope",
                 "agent.save_scene=False",
-                "agent.num_imagined_trajectories=3",
-                "dataset.camera.h=128",
-                "dataset.camera.w=128",
             ]
         )
-    cfg.checkpoint_path = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/DFM/outputs/weights/habelief/dfm_pose_prope_evolve_ctxt_128/model-5.pt"
-    cfg.results_folder = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/outputs/belief_agent_pose_prope_evolve_ctxt_128_"
+    cfg.checkpoint_path = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/DFM/outputs/training/habelief_room/dfm/pose_cond_prope_evolve_ctxt/model-8.pt"
+    cfg.results_folder = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/outputs/belief_agent_pose_prope_evolve_ctxt_hard"
     cfg.semantic_config = "/home/ubuntu/VLMP/tianmin-project/yyin34/codebase/embodied_tasks/DFM/configurations/semantic/onehot.yaml"
 
     # Run planner
